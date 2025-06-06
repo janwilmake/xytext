@@ -3,6 +3,9 @@
  * - Any path creates a separate collaborative text area
  * - Anyone can read any text area
  * - Only authenticated X users can write to text areas prefixed with their username
+ *
+ * Main prompt used: https://lmpify.com/httpsuithubcomj-lccbwz0
+ * https://lmpify.com/httpspastebincon-bkv3io0
  */
 
 // X OAuth middleware functions
@@ -29,6 +32,58 @@ export class TextDO {
     this.textContent = "";
     this.version = 0;
     this.roomName = "";
+    this.isDirty = false; // Track if we need to save
+
+    // Load initial state from storage
+    this.initializeFromStorage();
+
+    // Set up periodic saves and cleanup
+    this.setupPeriodicSave();
+  }
+
+  async initializeFromStorage() {
+    try {
+      const stored = await this.state.storage.get("textState");
+      if (stored) {
+        this.textContent = stored.textContent || "";
+        this.version = stored.version || 0;
+        console.log(
+          `Loaded text state: ${this.textContent.length} chars, version ${this.version}`,
+        );
+      }
+    } catch (err) {
+      console.error("Failed to load text state:", err);
+    }
+  }
+
+  async saveToStorage() {
+    if (!this.isDirty) return;
+
+    try {
+      await this.state.storage.put("textState", {
+        textContent: this.textContent,
+        version: this.version,
+        lastSaved: Date.now(),
+      });
+      this.isDirty = false;
+      console.log(
+        `Saved text state: ${this.textContent.length} chars, version ${this.version}`,
+      );
+    } catch (err) {
+      console.error("Failed to save text state:", err);
+    }
+  }
+
+  setupPeriodicSave() {
+    // Save every 10 seconds if there are changes
+    this.saveInterval = setInterval(() => {
+      if (this.isDirty) {
+        this.saveToStorage();
+      }
+    }, 10000);
+
+    // Also save when sessions become empty (but keep a delay in case new connections come)
+    this.emptyCheckTimeout = null;
   }
 
   async fetch(request) {
@@ -53,9 +108,13 @@ export class TextDO {
     const sessionId = crypto.randomUUID();
     this.roomName = roomName;
 
-    // Determine if user can write (room must be prefixed with their username)
-    const canWrite = username && roomName.startsWith(username + "/");
+    // Clear any pending shutdown since we have a new connection
+    if (this.emptyCheckTimeout) {
+      clearTimeout(this.emptyCheckTimeout);
+      this.emptyCheckTimeout = null;
+    }
 
+    const canWrite = username && roomName.startsWith(username + "/");
     this.sessions.set(sessionId, { webSocket, username, canWrite });
 
     webSocket.send(
@@ -79,6 +138,8 @@ export class TextDO {
         if (data.type === "text" && session?.canWrite) {
           this.textContent = data.text;
           this.version = data.version;
+          this.isDirty = true; // Mark as needing save
+
           this.broadcast(sessionId, {
             type: "text",
             text: data.text,
@@ -100,6 +161,11 @@ export class TextDO {
         username,
         sessionCount: this.sessions.size,
       });
+
+      // If no more sessions, schedule a save and potential cleanup
+      if (this.sessions.size === 0) {
+        this.scheduleEmptyRoomCleanup();
+      }
     });
 
     this.broadcast(sessionId, {
@@ -108,6 +174,37 @@ export class TextDO {
       username,
       sessionCount: this.sessions.size,
     });
+  }
+
+  scheduleEmptyRoomCleanup() {
+    // Save immediately when room becomes empty
+    if (this.isDirty) {
+      this.saveToStorage();
+    }
+
+    // Schedule cleanup in case no new connections come
+    this.emptyCheckTimeout = setTimeout(() => {
+      if (this.sessions.size === 0) {
+        this.cleanup();
+      }
+    }, 30000); // Wait 30 seconds before cleanup
+  }
+
+  cleanup() {
+    console.log(`Cleaning up empty room: ${this.roomName}`);
+
+    // Final save
+    if (this.isDirty) {
+      this.saveToStorage();
+    }
+
+    // Clear intervals
+    if (this.saveInterval) {
+      clearInterval(this.saveInterval);
+    }
+    if (this.emptyCheckTimeout) {
+      clearTimeout(this.emptyCheckTimeout);
+    }
   }
 
   broadcast(senderSessionId, message) {
@@ -224,14 +321,42 @@ export default {
           throw new Error(`Twitter API responded with ${tokenResponse.status}`);
         }
 
-        const { access_token } = await tokenResponse.json();
-        const headers = new Headers({ Location: redirectAfter });
+        const result = await tokenResponse.json();
+        const { access_token } = result;
 
+        // Try to get user info from X API, fallback to random slug
+        let username;
+        try {
+          const userResponse = await fetch("https://api.x.com/2/users/me", {
+            headers: { Authorization: `Bearer ${access_token}` },
+          });
+
+          if (userResponse.ok) {
+            const { data } = await userResponse.json();
+            username = data.username;
+          } else {
+            throw new Error("Failed to fetch user data");
+          }
+        } catch (e) {
+          // Generate random slug if API call fails
+          username = `user_${await generateRandomString(8)}`;
+        }
+
+        // Store user data in KV with token as key
+        const userData = {
+          username,
+          timestamp: Date.now(),
+        };
+        await env.KV.put(`user:${access_token}`, JSON.stringify(userData), {
+          expirationTtl: 86400 * 30, // 30 days
+        });
+
+        const headers = new Headers({ Location: redirectAfter });
         headers.append(
           "Set-Cookie",
           `x_access_token=${encodeURIComponent(
             access_token,
-          )}; HttpOnly; Path=/; Secure; SameSite=Lax; Max-Age=34560000`,
+          )}; HttpOnly; Path=/; Secure; SameSite=Lax; Max-Age=2592000`, // 30 days
         );
         headers.append("Set-Cookie", `x_oauth_state=; Max-Age=0`);
         headers.append("Set-Cookie", `x_code_verifier=; Max-Age=0`);
@@ -243,6 +368,22 @@ export default {
       }
     }
 
+    // Helper function to get username from token
+    const getUsernameFromToken = async (token) => {
+      if (!token) return null;
+
+      try {
+        const userData = await env.KV.get(`user:${token}`);
+        if (userData) {
+          const parsed = JSON.parse(userData);
+          return parsed.username;
+        }
+      } catch (e) {
+        console.error("Error getting user data from KV:", e);
+      }
+      return null;
+    };
+
     // Handle WebSocket connections
     if (url.pathname === "/ws") {
       const roomPath = url.searchParams.get("room") || "default";
@@ -252,20 +393,9 @@ export default {
         .find((r) => r.includes("x_access_token"))
         ?.split("=")[1];
 
-      let username = null;
-      if (token) {
-        try {
-          const res = await fetch("https://api.x.com/2/users/me", {
-            headers: { Authorization: `Bearer ${decodeURIComponent(token)}` },
-          });
-          if (res.ok) {
-            const { data } = await res.json();
-            username = data.username;
-          }
-        } catch (e) {
-          // Username will remain null
-        }
-      }
+      const username = await getUsernameFromToken(
+        token ? decodeURIComponent(token) : null,
+      );
 
       const roomObject = env.TEXT.get(env.TEXT.idFromName(roomPath));
       const newUrl = new URL(url);
@@ -284,20 +414,9 @@ export default {
       .find((r) => r.includes("x_access_token"))
       ?.split("=")[1];
 
-    let username = null;
-    if (token) {
-      try {
-        const res = await fetch("https://api.x.com/2/users/me", {
-          headers: { Authorization: `Bearer ${decodeURIComponent(token)}` },
-        });
-        if (res.ok) {
-          const { data } = await res.json();
-          username = data.username;
-        }
-      } catch (e) {
-        // Username will remain null
-      }
-    }
+    const username = await getUsernameFromToken(
+      token ? decodeURIComponent(token) : null,
+    );
 
     return new Response(generateHTML(roomPath, username), {
       headers: { "Content-Type": "text/html" },
@@ -311,7 +430,7 @@ function generateHTML(roomPath, username) {
   return `<!DOCTYPE html>
 <html>
 <head>
-<title>Collaborative Text Editor - ${roomPath}</title>
+<title>X OAuthed Textarea - ${roomPath}</title>
 <style>
 body{margin:0;background:#f5f5f5;font-family:Arial,sans-serif;padding:20px}
 header{background:white;padding:15px;border-radius:8px;margin-bottom:20px;box-shadow:0 2px 10px rgba(0,0,0,0.1)}

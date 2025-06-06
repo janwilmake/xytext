@@ -10,5 +10,11 @@
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["TextDO"] }],
   "vars": {
     "X_REDIRECT_URI": "https://xtext.wilmake.com/callback"
-  }
+  },
+  "kv_namespaces": [
+    {
+      "binding": "KV",
+      "id": "20e8d370e1d149659c449102f2ec6412"
+    }
+  ]
 }
