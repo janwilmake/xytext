@@ -1,0 +1,14 @@
+{
+  "name": "xtextareado",
+  "main": "readme.js",
+  "compatibility_date": "2025-06-05",
+  "dev": { "port": 3000 },
+  "durable_objects": {
+    "bindings": [{ "name": "TEXT", "class_name": "TextDO" }]
+  },
+  "routes": [{ "pattern": "xtext.wilmake.com", "custom_domain": true }],
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["TextDO"] }],
+  "vars": {
+    "X_REDIRECT_URI": "https://xtext.wilmake.com/callback"
+  }
+}
