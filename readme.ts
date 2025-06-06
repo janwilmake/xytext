@@ -50,29 +50,6 @@ export class TextDO implements DurableObject {
 
   constructor(private state: DurableObjectState, private env: Env) {
     this.sql = state.storage.sql;
-    this.initSQLite();
-  }
-
-  async initSQLite(): Promise<void> {
-    this.sql.exec(`
-      CREATE TABLE IF NOT EXISTS documents (
-        path TEXT PRIMARY KEY,
-        content TEXT,
-        created_at INTEGER,
-        updated_at INTEGER
-      )
-    `);
-
-    // Load existing content
-    const result = this.sql.exec(
-      `SELECT content FROM documents WHERE path = ?`,
-      [this.state.id.toString()],
-    );
-
-    console.log({ result });
-    if (result.toArray().length > 0) {
-      this.textContent = (result.toArray()[0].content as string) || "";
-    }
   }
 
   saveContent(content: string) {
@@ -88,6 +65,27 @@ export class TextDO implements DurableObject {
     );
   }
 
+  init(path: string) {
+    this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS documents (
+        path TEXT PRIMARY KEY,
+        content TEXT,
+        created_at INTEGER,
+        updated_at INTEGER
+      )
+    `);
+
+    // Load existing content
+    const result = this.sql.exec(
+      `SELECT content FROM documents WHERE path = ?`,
+      path,
+    );
+
+    if (result.toArray().length > 0) {
+      this.textContent = (result.toArray()[0].content as string) || "";
+    }
+  }
+
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
     if (url.pathname === "/ws") {
@@ -100,10 +98,14 @@ export class TextDO implements DurableObject {
       server.accept();
       const sessionId = crypto.randomUUID();
       const usernameStr = url.searchParams.get("username") || "anonymous";
+      const path = url.searchParams.get("path");
+
+      this.init(path);
+
       const isAdmin =
         usernameStr === "admin" ||
-        url.searchParams.get("path").startsWith("/" + usernameStr + "/") ||
-        url.searchParams.get("path").startsWith("/anonymous/");
+        path.startsWith("/" + usernameStr + "/") ||
+        path.startsWith("/anonymous/");
 
       this.sessions.set(sessionId, {
         webSocket: server,
