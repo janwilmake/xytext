@@ -449,7 +449,7 @@ footer a{color:#007bff;text-decoration:none}
 </head>
 <body>
 <header>
-  <h1>Collaborative Text Editor</h1>
+  <h1>X OAuthed Textarea</h1>
   <h2>Room: /${roomPath}</h2>
   <div id="status">Connecting...</div>
 </header>
