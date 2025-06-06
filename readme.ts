@@ -10,6 +10,10 @@
  * - Real-time markdown preview
  *
  * https://lmpify.com/httpsuithubcomj-niymxy0
+ *
+ * License:MIT
+ *
+ * By Jan Wilmake
  */
 
 interface Env {

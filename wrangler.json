@@ -6,12 +6,15 @@
   "durable_objects": {
     "bindings": [{ "name": "TEXT", "class_name": "TextDO" }]
   },
-  "routes": [{ "pattern": "xtext.wilmake.com", "custom_domain": true }],
+  "routes": [
+    { "pattern": "www.xytext.com", "custom_domain": true },
+    { "pattern": "xytext.com", "custom_domain": true }
+  ],
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["TextDO"] }],
 
   "vars": {
     "ENVIRONMENT": "production",
-    "X_REDIRECT_URI": "https://xtext.wilmake.com/callback"
+    "X_REDIRECT_URI": "https://xytext.com/callback"
   },
   "kv_namespaces": [
     {
