@@ -1,6 +1,6 @@
 {
   "name": "xtextareado",
-  "main": "readme.ts",
+  "main": "main.ts",
   "compatibility_date": "2025-06-05",
   "dev": { "port": 3000 },
   "durable_objects": {
@@ -11,15 +11,11 @@
     { "pattern": "xytext.com", "custom_domain": true }
   ],
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["TextDO"] }],
-
   "vars": {
     "ENVIRONMENT": "production",
     "X_REDIRECT_URI": "https://xytext.com/callback"
   },
   "kv_namespaces": [
-    {
-      "binding": "KV",
-      "id": "20e8d370e1d149659c449102f2ec6412"
-    }
+    { "binding": "KV", "id": "20e8d370e1d149659c449102f2ec6412" }
   ]
 }

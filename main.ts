@@ -1,6 +1,10 @@
 // @ts-check
 /// <reference types="@cloudflare/workers-types" />
 /// <reference lib="esnext" />
+//@ts-ignore
+import app from "./app.html";
+//@ts-ignore
+import index from "./index.html";
 
 interface Env {
   TEXT: DurableObjectNamespace;
@@ -93,8 +97,6 @@ export class TextDO implements DurableObject {
       now,
       now,
     );
-
-    console.log("savecontent", updated.rowsRead, updated.rowsWritten);
   }
 
   async getUsernameFromToken(token: string): Promise<string> {
@@ -109,12 +111,56 @@ export class TextDO implements DurableObject {
     const url = new URL(request.url);
     const isLocalhost = this.env.ENVIRONMENT === "development";
 
+    const isRoot = url.pathname.split("/").filter((x) => x).length === 1;
+    let username = "admin";
+    if (!isLocalhost) {
+      const token = request.headers
+        .get("Cookie")
+        ?.split(";")
+        .find((r) => r.includes("x_access_token"))
+        ?.split("=")[1];
+      username = await this.getUsernameFromToken(token || "");
+    }
+
+    const pathSegments = url.pathname.split("/").filter((p) => p);
+    const firstSegment = pathSegments[0] || "default";
+
+    const isAdmin =
+      username === "admin" ||
+      firstSegment === username ||
+      firstSegment === "anonymous";
+
     // Load existing content
-    const textContent =
+    let textContent =
       this.sql
         .exec(`SELECT content FROM documents WHERE path = ?`, url.pathname)
         .toArray()[0]?.content || "";
 
+    if (isRoot) {
+      const files = this.sql
+        .exec(`SELECT path,created_at,updated_at FROM documents`)
+        .toArray();
+      textContent = `# Root of ${firstSegment}
+          
+          
+Go to any subpath of /${firstSegment}/* to start ${
+        isAdmin ? "editing" : "watching"
+      } a file.
+
+Available files:
+
+${files
+  .map(
+    (file) =>
+      `- [${file.path}](${file.path}) - Created: ${new Date(
+        file.created_at as number,
+      ).toLocaleString()}, Updated: ${new Date(
+        file.updated_at as number,
+      ).toLocaleString()}`,
+  )
+  .join("\n")}
+`;
+    }
     // WebSocket handling
     if (request.headers.get("Upgrade") === "websocket") {
       const webSocketPair = new WebSocketPair();
@@ -122,24 +168,6 @@ export class TextDO implements DurableObject {
 
       server.accept();
       const sessionId = crypto.randomUUID();
-
-      let username = "admin";
-      if (!isLocalhost) {
-        const token = request.headers
-          .get("Cookie")
-          ?.split(";")
-          .find((r) => r.includes("x_access_token"))
-          ?.split("=")[1];
-        username = await this.getUsernameFromToken(token || "");
-      }
-
-      const pathSegments = url.pathname.split("/").filter((p) => p);
-      const firstSegment = pathSegments[0] || "default";
-
-      const isAdmin =
-        username === "admin" ||
-        firstSegment === username ||
-        firstSegment === "anonymous";
 
       this.sessions.set(sessionId, {
         path: url.pathname,
@@ -340,9 +368,15 @@ export class TextDO implements DurableObject {
       });
     }
 
+    if (url.pathname === "/") {
+      return new Response(index, {
+        headers: { "content-type": "text/html;charset=utf8" },
+      });
+    }
+
     // Default: serve HTML interface
-    return new Response("Not found", {
-      status: 404,
+    return new Response(app, {
+      headers: { "content-type": "text/html;charset=utf8" },
     });
   }
 
@@ -365,7 +399,7 @@ export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     // Route to durable object based on first path segment
     return env.TEXT.get(
-      env.TEXT.idFromName(new URL(request.url).pathname.split("/")[1]),
+      env.TEXT.idFromName(new URL(request.url).pathname.split("/")[1] + ":v2"),
     ).fetch(request);
   },
 };
