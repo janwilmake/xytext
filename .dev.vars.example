@@ -1,0 +1,4 @@
+X_CLIENT_ID=your_x_client_id
+X_CLIENT_SECRET=your_x_client_secret
+X_REDIRECT_URI=
+ENVIRONMENT=development
