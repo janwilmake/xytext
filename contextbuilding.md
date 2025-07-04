@@ -8,10 +8,8 @@
 
 - ✅ Login with X (or my own oauth provider)
 - ✅ `EditDurableObject`: ensures realtime sending and receiving of changes to markdown
+- ✅ sidebar: explorer with files/folders
 - `ContextDO`: contains SQLite with all documents and all contexts of all users, augmented with metadata. Can be DORM to also have one per user/group/organisation but idk yet what makes most sense to shard on.
-- sidebar: explorer with files/folders
-- left: raw markdown (monaco or other lightweight js solution)
-- right: pretty markdown with rich "context-og-deluxe-embeds"
 
 ## Bookmarking context
 
