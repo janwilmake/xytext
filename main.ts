@@ -2494,7 +2494,8 @@ ${files
             },
             
             sendContentChange() {
-                if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+                if (!this.ws || this.ws.readyState !== WebSocket.OPEN || this._settingFromWebSocket) return;
+
                 this.version++;
                 const position = this.editor.getPosition();
                 this.ws.send(JSON.stringify({
@@ -2527,11 +2528,21 @@ ${files
                     case 'text':
                         if (message.fromSession !== this.sessionId) {
                             const position = this.editor.getPosition();
+                            // IMPORTANT: Temporarily disable the content change listener
+                            // to prevent broadcast loops when setting content from WebSocket
+                            this._settingFromWebSocket = true;
+                            
                             this.editor.setValue(message.text);
                             this.version = message.version;
+                            
                             if (this.isAdmin) {
                                 this.editor.setPosition(position);
                             }
+                            
+                            // Re-enable after a short delay to ensure setValue has completed
+                            setTimeout(() => {
+                                this._settingFromWebSocket = false;
+                            }, 10);
                         }
                         break;
                     case 'explorer_update':

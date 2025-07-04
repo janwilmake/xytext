@@ -1,7 +1,12 @@
 TODO:
 
 - People should be able to see the main person is doing by having my the profilepic on the filename if present.
--
+
+# Search (file-content search, path search)
+
+This is gonna be tricky
+
+#
 
 # Custom named generations?
 
