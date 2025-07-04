@@ -1,12 +1,15 @@
 TODO:
 
 - People should be able to see the main person is doing by having my the profilepic on the filename if present.
+- Make SQL read only
 
 # Search (file-content search, path search)
 
 This is gonna be tricky
 
-#
+# Terminal
+
+I need to be able to do arbitrary file transformations to these files. For this, it's probably best to allow any other tool access. For this we need this to be an oauth PROVIDER.
 
 # Custom named generations?
 
