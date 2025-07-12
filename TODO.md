@@ -3,6 +3,13 @@ TODO:
 - People should be able to see the main person is doing by having my the profilepic on the filename if present.
 - Make SQL read only
 
+# Binary files
+
+- we may already be able to just put base64 in TEXT or add a BLOB column and use this for binary files. with this, files would go up to 2MB
+- we'll need a blocks table setup connected to the nodes table for binary files over 2mb. less important as this shouldn't be there for most repos.
+
+#
+
 # Search (file-content search, path search)
 
 This is gonna be tricky
