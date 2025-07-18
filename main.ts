@@ -2,7 +2,11 @@
 /// <reference types="@cloudflare/workers-types" />
 /// <reference lib="esnext" />
 
-import { Browsable, studio, BrowsableHandler } from "browsable-object";
+import {
+  Queryable,
+  QueryableHandler,
+  studioMiddleware,
+} from "queryable-object";
 import { DurableObject } from "cloudflare:workers";
 const chevronRightSvg = `<svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
 <path fill-rule="evenodd" clip-rule="evenodd" d="M10.0719 8.02397L5.7146 3.66666L6.33332 3.04794L11 7.71461V8.33333L6.33332 13L5.7146 12.3813L10.0719 8.02397Z" fill="currentColor"/></svg>`;
@@ -12,7 +16,8 @@ const chevronDownSvg = `<svg width="16" height="16" viewBox="0 0 16 16" fill="no
 const pinSvg = `<svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M4.10002 1.08186L3.72499 1.94778L5.18409 3.40687L4.53635 7.42274C4.01662 7.60746 3.55856 7.93327 3.21358 8.36365C2.87267 8.79115 2.65993 9.30651 2.59998 9.85L3.09777 10.3478L6.91588 10.2932L6.9091 16L7.94543 14.9637L7.94548 10.2728L11.3 10.2319L11.8181 9.71367C11.7748 9.17983 11.5742 8.67084 11.2417 8.25096C10.9092 7.83107 10.4597 7.51912 9.95002 7.35457L9.42496 3.35227L10.925 1.85227L10.5772 1L4.10002 1.08186ZM8.5523 2.80687L8.40224 3.24324L9.00224 7.75686L9.30907 8.1455C9.88043 8.32423 10.369 8.70152 10.6864 9.20914L7.95912 9.20914L3.77272 9.26369C4.10766 8.75069 4.60442 8.36429 5.18409 8.16594L5.5046 7.76369L6.23411 3.22959L6.0977 2.80687L5.31359 2.02277L9.34997 1.96825L8.5523 2.80687Z" fill="currentColor"/></svg>`;
 const headline = "Share Your Prompting In Real-Time";
 interface Env {
-  TEXT: DurableObjectNamespace;
+  TEXT: DurableObjectNamespace<TextDO & QueryableHandler>;
+  ADMIN_SECRET: string;
   KV: KVNamespace;
   X_CLIENT_ID: string;
   X_CLIENT_SECRET: string;
@@ -91,7 +96,7 @@ async function generateRandomString(length: number): Promise<string> {
   const randomBytes = new Uint8Array(length);
   crypto.getRandomValues(randomBytes);
   return Array.from(randomBytes, (byte) =>
-    byte.toString(16).padStart(2, "0"),
+    byte.toString(16).padStart(2, "0")
   ).join("");
 }
 
@@ -104,19 +109,17 @@ async function generateCodeChallenge(codeVerifier: string): Promise<string> {
   return base64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
-@Browsable()
+@Queryable()
 export class TextDO extends DurableObject {
   private sessions: Map<string, Session> = new Map();
   private version: number = 0;
   public sql: SqlStorage;
   public env: Env;
-  public _bdoHandler: BrowsableHandler;
   constructor(private state: DurableObjectState, env: Env) {
     super(state, env);
     this.sql = state.storage.sql;
     this.env = env;
     this.initSQLite();
-    this._bdoHandler = new BrowsableHandler(this.sql);
   }
 
   async initSQLite(): Promise<void> {
@@ -152,21 +155,21 @@ export class TextDO extends DurableObject {
 
     // Indexes for performance
     this.sql.exec(
-      `CREATE INDEX IF NOT EXISTS idx_parent_path ON nodes(parent_path)`,
+      `CREATE INDEX IF NOT EXISTS idx_parent_path ON nodes(parent_path)`
     );
     this.sql.exec(`CREATE INDEX IF NOT EXISTS idx_type ON nodes(type)`);
     this.sql.exec(`CREATE INDEX IF NOT EXISTS idx_name ON nodes(name)`);
     this.sql.exec(
-      `CREATE INDEX IF NOT EXISTS idx_path_type ON nodes(path, type)`,
+      `CREATE INDEX IF NOT EXISTS idx_path_type ON nodes(path, type)`
     );
     this.sql.exec(
-      `CREATE INDEX IF NOT EXISTS idx_expanded ON nodes(is_expanded)`,
+      `CREATE INDEX IF NOT EXISTS idx_expanded ON nodes(is_expanded)`
     );
     this.sql.exec(
-      `CREATE INDEX IF NOT EXISTS idx_tab_open ON nodes(is_tab_open)`,
+      `CREATE INDEX IF NOT EXISTS idx_tab_open ON nodes(is_tab_open)`
     );
     this.sql.exec(
-      `CREATE INDEX IF NOT EXISTS idx_tab_pinned ON nodes(is_tab_pinned)`,
+      `CREATE INDEX IF NOT EXISTS idx_tab_pinned ON nodes(is_tab_pinned)`
     );
   }
 
@@ -203,7 +206,7 @@ export class TextDO extends DurableObject {
     content: string,
     username: string,
     line: number = 1,
-    column: number = 1,
+    column: number = 1
   ): void {
     const now = Math.round(Date.now() / 1000);
 
@@ -239,7 +242,7 @@ export class TextDO extends DurableObject {
       now,
       now,
       line,
-      column,
+      column
     );
 
     // Update last open path
@@ -259,7 +262,7 @@ export class TextDO extends DurableObject {
       const existing = this.sql
         .exec(
           `SELECT id FROM nodes WHERE path = ? AND type = 'folder'`,
-          currentPath,
+          currentPath
         )
         .toArray();
 
@@ -275,7 +278,7 @@ export class TextDO extends DurableObject {
       `,
           currentPath,
           name,
-          parent_path,
+          parent_path
         );
       } else {
         // Expand existing folder
@@ -283,7 +286,7 @@ export class TextDO extends DurableObject {
           `
         UPDATE nodes SET is_expanded = TRUE WHERE path = ? AND type = 'folder'
       `,
-          currentPath,
+          currentPath
         );
       }
     }
@@ -323,7 +326,7 @@ export class TextDO extends DurableObject {
     `,
       path,
       name,
-      parent_path,
+      parent_path
     );
   }
 
@@ -380,7 +383,7 @@ export class TextDO extends DurableObject {
       targetPath,
       name,
       parent_path,
-      sourcePath,
+      sourcePath
     );
 
     // Update all children paths if it's a folder
@@ -400,7 +403,7 @@ export class TextDO extends DurableObject {
           newChildPath,
           childName,
           childParentPath,
-          child.path,
+          child.path
         );
       }
     }
@@ -464,7 +467,7 @@ export class TextDO extends DurableObject {
       WHERE path = ? OR path LIKE ? || '/%'
     `,
       path,
-      path,
+      path
     );
     return result.rowsWritten > 0;
   }
@@ -477,7 +480,7 @@ export class TextDO extends DurableObject {
       WHERE type = 'folder' AND is_expanded = TRUE AND path LIKE ?
       ORDER BY path
     `,
-        `/${username}/%`,
+        `/${username}/%`
       )
       .toArray() as { path: string }[];
 
@@ -518,7 +521,7 @@ export class TextDO extends DurableObject {
       WHERE is_tab_open = TRUE AND type = 'file' AND path LIKE ?
       ORDER BY is_tab_pinned DESC
     `,
-        `/${username}/%`,
+        `/${username}/%`
       )
       .toArray();
 
@@ -533,7 +536,7 @@ export class TextDO extends DurableObject {
       WHERE path LIKE ? AND type = 'file' AND is_tab_pinned = TRUE
       ORDER BY updated_at DESC
     `,
-        `/${username}/%`,
+        `/${username}/%`
       )
       .toArray() as FileNode[];
 
@@ -561,7 +564,7 @@ export class TextDO extends DurableObject {
       SET is_expanded = NOT is_expanded, updated_at = strftime('%s', 'now')
       WHERE path = ? AND type = 'folder'
     `,
-      path,
+      path
     );
   }
 
@@ -574,14 +577,14 @@ export class TextDO extends DurableObject {
     `,
       line,
       column,
-      path,
+      path
     );
   }
 
   closeTab(path: string): void {
     this.sql.exec(
       `UPDATE nodes SET is_tab_open = FALSE, updated_at = strftime('%s', 'now') WHERE path = ? AND type = 'file'`,
-      path,
+      path
     );
   }
 
@@ -590,7 +593,7 @@ export class TextDO extends DurableObject {
     const current = this.sql
       .exec(
         `SELECT is_tab_pinned FROM nodes WHERE path = ? AND type = 'file'`,
-        path,
+        path
       )
       .toArray()[0] as { is_tab_pinned: 0 | 1 } | undefined;
 
@@ -605,7 +608,7 @@ export class TextDO extends DurableObject {
       WHERE path = ? AND type = 'file'
     `,
       newPinnedState,
-      path,
+      path
     );
   }
 
@@ -615,7 +618,7 @@ export class TextDO extends DurableObject {
         `
       SELECT explorer_scroll_top_path, last_open_path FROM ui_state WHERE username = ?
     `,
-        username,
+        username
       )
       .toArray()[0] as UIState | undefined;
 
@@ -633,7 +636,7 @@ export class TextDO extends DurableObject {
     `,
       username,
       merged.explorer_scroll_top_path || null,
-      merged.last_open_path || null,
+      merged.last_open_path || null
     );
   }
 
@@ -652,7 +655,7 @@ export class TextDO extends DurableObject {
   async getUsernameFromToken(token: string): Promise<string> {
     if (!token) return "anonymous";
     const username = await this.env.KV.get(
-      `token:${decodeURIComponent(token)}`,
+      `token:${decodeURIComponent(token)}`
     );
     return username || "anonymous";
   }
@@ -664,7 +667,7 @@ export class TextDO extends DurableObject {
       SELECT path, content, created_at, updated_at FROM nodes 
       WHERE path LIKE ? AND type = 'file'
     `,
-        `/${username}/%`,
+        `/${username}/%`
       )
       .toArray() as FileNode[];
 
@@ -737,7 +740,7 @@ export class TextDO extends DurableObject {
 
     const renderChildren = (
       parentPath: string | null,
-      level: number = 0,
+      level: number = 0
     ): string => {
       const children = nodesByParent.get(parentPath) || [];
       return children
@@ -892,7 +895,7 @@ export class TextDO extends DurableObject {
     const nodeResult = this.sql
       .exec(
         `SELECT content, type, last_cursor_line, last_cursor_column FROM nodes WHERE path = ?`,
-        url.pathname,
+        url.pathname
       )
       .toArray()[0] as
       | {
@@ -935,7 +938,7 @@ export class TextDO extends DurableObject {
         SELECT path, created_at, updated_at FROM nodes 
         WHERE path LIKE ? AND type = 'file'
       `,
-          `/${firstSegment}/%`,
+          `/${firstSegment}/%`
         )
         .toArray();
 
@@ -946,7 +949,7 @@ export class TextDO extends DurableObject {
           const lastFileExists = this.sql
             .exec(
               `SELECT 1 FROM nodes WHERE path = ? AND type = 'file'`,
-              uiState.last_open_path,
+              uiState.last_open_path
             )
             .toArray()[0];
 
@@ -971,10 +974,10 @@ ${files
   .map(
     (file) =>
       `- [${file.path}](${file.path}) - Created: ${new Date(
-        file.created_at as number,
+        file.created_at as number
       ).toLocaleString()}, Updated: ${new Date(
-        file.updated_at as number,
-      ).toLocaleString()}`,
+        file.updated_at as number
+      ).toLocaleString()}`
   )
   .join("\n")}
 `;
@@ -990,7 +993,7 @@ ${files
         textContent,
         firstSegment,
         cursorLine,
-        cursorColumn,
+        cursorColumn
       );
     }
 
@@ -1017,9 +1020,9 @@ ${files
         Location: `https://x.com/i/oauth2/authorize?response_type=code&client_id=${
           this.env.X_CLIENT_ID
         }&redirect_uri=${encodeURIComponent(
-          this.env.X_REDIRECT_URI,
+          this.env.X_REDIRECT_URI
         )}&scope=${encodeURIComponent(
-          "users.read tweet.read offline.access",
+          "users.read tweet.read offline.access"
         )}&state=${state}&code_challenge=${codeChallenge}&code_challenge_method=S256`,
       });
       const isLocalhost = this.env.ENVIRONMENT === "development";
@@ -1027,11 +1030,11 @@ ${files
 
       headers.append(
         "Set-Cookie",
-        `x_oauth_state=${state}; HttpOnly; Path=/;${securePart} SameSite=Lax; Max-Age=600`,
+        `x_oauth_state=${state}; HttpOnly; Path=/;${securePart} SameSite=Lax; Max-Age=600`
       );
       headers.append(
         "Set-Cookie",
-        `x_code_verifier=${codeVerifier}; HttpOnly; Path=/;${securePart} SameSite=Lax; Max-Age=600`,
+        `x_code_verifier=${codeVerifier}; HttpOnly; Path=/;${securePart} SameSite=Lax; Max-Age=600`
       );
 
       return new Response("Redirecting", { status: 307, headers });
@@ -1080,11 +1083,11 @@ ${files
         isAdmin,
         isLocalhost,
         cursorLine,
-        cursorColumn,
+        cursorColumn
       ),
       {
         headers: { "content-type": "text/html;charset=utf8" },
-      },
+      }
     );
   }
 
@@ -1092,7 +1095,7 @@ ${files
     request: Request,
     url: URL,
     username: string,
-    firstSegment: string,
+    firstSegment: string
   ): Promise<Response> {
     const pathSegments = url.pathname.split("/").filter((p) => p);
     const apiEndpoint = pathSegments[2]; // after /{username}/__api/
@@ -1152,7 +1155,7 @@ ${files
         }),
         {
           headers: { "Content-Type": "application/json" },
-        },
+        }
       );
     }
 
@@ -1170,7 +1173,7 @@ ${files
           {
             status: 400,
             headers: { "Content-Type": "application/json" },
-          },
+          }
         );
       }
     }
@@ -1189,7 +1192,7 @@ ${files
           {
             status: 400,
             headers: { "Content-Type": "application/json" },
-          },
+          }
         );
       }
     }
@@ -1208,7 +1211,7 @@ ${files
           {
             status: 400,
             headers: { "Content-Type": "application/json" },
-          },
+          }
         );
       }
     }
@@ -1227,7 +1230,7 @@ ${files
           {
             status: 400,
             headers: { "Content-Type": "application/json" },
-          },
+          }
         );
       }
     }
@@ -1246,7 +1249,7 @@ ${files
           {
             status: 400,
             headers: { "Content-Type": "application/json" },
-          },
+          }
         );
       }
     }
@@ -1289,7 +1292,7 @@ ${files
     textContent: string,
     firstSegment: string,
     cursorLine: number,
-    cursorColumn: number,
+    cursorColumn: number
   ): Response {
     const webSocketPair = new WebSocketPair();
     const [client, server] = Object.values(webSocketPair);
@@ -1320,7 +1323,7 @@ ${files
         ui_state: uiState,
         line: cursorLine,
         column: cursorColumn,
-      } as WSMessage),
+      } as WSMessage)
     );
 
     server.addEventListener("message", async (msg: MessageEvent) => {
@@ -1339,7 +1342,7 @@ ${files
               data.text,
               firstSegment,
               data.line || 1,
-              data.column || 1,
+              data.column || 1
             );
           } catch (error) {
             // Send error back to client if trying to save to folder
@@ -1347,7 +1350,7 @@ ${files
               JSON.stringify({
                 type: "error",
                 message: "Cannot edit folder content",
-              }),
+              })
             );
             return;
           }
@@ -1378,7 +1381,7 @@ ${files
             `UPDATE nodes SET last_cursor_line = ?, last_cursor_column = ? WHERE path = ? AND type = 'file'`,
             data.line,
             data.column,
-            url.pathname,
+            url.pathname
           );
         }
       } catch (err) {
@@ -1420,7 +1423,7 @@ ${files
     if (!stateCookie || !codeVerifier) {
       return new Response(
         "Cookies weren't set. Likely issue with cookie configuration",
-        { status: 400 },
+        { status: 400 }
       );
     }
 
@@ -1438,7 +1441,7 @@ ${files
           headers: {
             "Content-Type": "application/x-www-form-urlencoded",
             Authorization: `Basic ${btoa(
-              `${this.env.X_CLIENT_ID}:${this.env.X_CLIENT_SECRET}`,
+              `${this.env.X_CLIENT_ID}:${this.env.X_CLIENT_SECRET}`
             )}`,
           },
           body: new URLSearchParams({
@@ -1447,7 +1450,7 @@ ${files
             grant_type: "authorization_code",
             code_verifier: codeVerifier,
           }),
-        },
+        }
       );
 
       if (!tokenResponse.ok) {
@@ -1480,8 +1483,8 @@ ${files
       headers.append(
         "Set-Cookie",
         `x_access_token=${encodeURIComponent(
-          access_token,
-        )}; HttpOnly; Path=/;${securePart} SameSite=Lax; Max-Age=34560000`,
+          access_token
+        )}; HttpOnly; Path=/;${securePart} SameSite=Lax; Max-Age=34560000`
       );
       headers.append("Set-Cookie", `x_oauth_state=; Max-Age=0`);
       headers.append("Set-Cookie", `x_code_verifier=; Max-Age=0`);
@@ -1528,14 +1531,21 @@ ${files
     isAdmin: boolean,
     isLocalhost: boolean,
     cursorLine: number,
-    cursorColumn: number,
+    cursorColumn: number
   ): string {
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>XYText - ${headline}</title>
+    <title>${currentPath.split("/").pop()}</title>
+    <link rel="icon" type="image/png" href="/favicon-96x96.png" sizes="96x96" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="shortcut icon" href="/favicon.ico" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+    <meta name="apple-mobile-web-app-title" content="MyWebSite" />
+    <link rel="manifest" href="/site.webmanifest" />
+
     <style>
         * { 
             box-sizing: border-box; 
@@ -1545,8 +1555,6 @@ ${files
             --bg-color: #ffffff;
             --text-color: #24292e;
             --border-color: #e1e4e8;
-            --title-bar-bg: #f6f8fa;
-            --title-bar-text: #24292e;
             --tabs-bg: #f6f8fa;
             --tab-bg: #f6f8fa;
             --tab-active-bg: #ffffff;
@@ -1569,8 +1577,6 @@ ${files
                 --bg-color: #0d1117;
                 --text-color: #e6edf3;
                 --border-color: #30363d;
-                --title-bar-bg: #161b22;
-                --title-bar-text: #e6edf3;
                 --tabs-bg: #161b22;
                 --tab-bg: #21262d;
                 --tab-active-bg: #0d1117;
@@ -1604,30 +1610,6 @@ ${files
             display: flex;
             flex-direction: column;
             height: 100vh;
-        }
-        
-        .title-bar {
-            background: var(--title-bar-bg);
-            color: var(--title-bar-text);
-            padding: 8px 16px;
-            font-size: 13px;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            border-bottom: 1px solid var(--border-color);
-            min-height: 35px;
-        }
-        
-        .title-bar h1 {
-            margin: 0;
-            font-size: 13px;
-            font-weight: 400;
-        }
-        
-        .title-bar .connection-info {
-            font-size: 11px;
-            color: var(--text-color);
-            opacity: 0.7;
         }
         
         .tabs-container {
@@ -1840,24 +1822,14 @@ ${files
             font-size: 13px;
         }
         
-        .auth-actions {
-            display: flex;
-            gap: 8px;
-        }
-        
         .btn {
-            background: #0969da;
             color: #ffffff;
-            border: none;
-            padding: 6px 12px;
             cursor: pointer;
             font-size: 12px;
-            border-radius: 2px;
-            transition: background-color 0.2s ease;
         }
         
         .btn:hover {
-            background: #0550ae;
+            color: #ccc;
         }
         
         .context-menu {
@@ -1917,18 +1889,11 @@ ${files
 </head>
 <body>
     <div class="vscode-layout">
-        <div class="title-bar">
-            <h1>XYText - ${this.escapeHtml(currentPath)}</h1>
-            <div class="connection-info">
-                <div class="auth-actions">
-                   <button class="btn" onclick="window.location.href='/logout'">Logout</button>
-                </div>
-            </div>
-        </div>
-        
+        <!--
         <div class="tabs-container" id="tabsContainer">
             ${tabsHTML}
         </div>
+        -->
         
         <div class="main-content">
             <div class="editor-container" id="editor">
@@ -1943,7 +1908,11 @@ ${files
         </div>
         
         <div class="status-bar">
-            <span id="connectionStatus">Connected</span>
+            <span style="display:flex;flex-direction:row;gap:10px;">
+              <span id="connectionStatus">Connected</span>
+              <span class="btn" onclick="window.location.href='/logout'">Logout</span>
+              <span class="btn" onclick="window.location.href='https://letmeprompt.com/from/'+window.location.href">Prompt</span>
+            </span>
             <span id="cursorInfo">Line ${cursorLine}, Column ${cursorColumn}</span>
         </div>
     </div>
@@ -2255,7 +2224,8 @@ ${files
                 
                 window.handleExplorerClick = (path, type) => {
                     if (type === 'file') {
-                        window.location.href = path;
+                        //window.location.href = path;
+                        window.open(path,path).focus();
                     } else if (type === 'folder') {
                         // Toggle expansion on folder click
                         window.toggleExpansion(path);
@@ -2758,10 +2728,13 @@ ${files
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
-    if (url.pathname === "/studio") {
-      return studio(request, env.TEXT);
-    }
     const username = url.pathname.split("/")[1];
-    return env.TEXT.get(env.TEXT.idFromName(username + ":v14")).fetch(request);
+    const stub = env.TEXT.get(env.TEXT.idFromName(username + ":v14"));
+    if (url.pathname === "/studio") {
+      return studioMiddleware(request, stub.raw, {
+        basicAuth: { username, password: env.ADMIN_SECRET },
+      });
+    }
+    return stub.fetch(request);
   },
 };

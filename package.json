@@ -3,6 +3,6 @@
     "@cloudflare/workers-types": "^4.20250606.0"
   },
   "dependencies": {
-    "browsable-object": "^0.1.6"
+    "queryable-object": "^0.0.8"
   }
 }

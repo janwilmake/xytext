@@ -5,7 +5,7 @@
   "main": "main.ts",
   "compatibility_date": "2025-06-05",
   "dev": { "port": 3000 },
-  "assets": { "directory": "./contextarea-monaco" },
+  "assets": { "directory": "./public" },
   "durable_objects": {
     "bindings": [{ "name": "TEXT", "class_name": "TextDO" }]
   },

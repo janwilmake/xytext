@@ -17,3 +17,28 @@ Initial implementation that broadcasts file content to all clients
 - add adherence to system theme, adding light mode
 
 give me a full new implementation
+
+# Huge simplification by leveraging target (2025-07-18)
+
+I made this POC: https://letmeprompt.com/rules-httpsuithu-n4xrr10 https://targettabs.gptideas.com
+
+With sidebar: https://letmeprompt.com/rules-httpsuithu-y4kcl40 https://targetfiles.gptideas.com
+
+As can be seen, the concept doesn't work so well on safari, but it works perfectly on chromium. However, it seems webkits implementation is more according to the spec while chromium is a bit more liberal. Other browsers are split on this, firefox might work, edge likely also works since it's chromium-based.
+
+https://letmeprompt.com/rules-httpsuithu-8awukl0
+
+It may be possible create a safari extension that gets us the desired behavior.
+
+https://letmeprompt.com/rules-httpsuithu-ys708o0
+
+An extension is desired anyways because I'd want to allow anyone to view what I'm doing in the browser (and store it for ai-agent context-use)
+
+TODO
+
+- ✅ every html should have filename as as title
+- ✅ sidebar links use `window.open(path,path).focus()`
+- ✅ Extension-based favicon
+- ✅ Move 'logout' to footer, remove header too
+- ✅ For now, hide tabs
+- Entire tabs logic can be removed, we are leveraging Chromes state of open tabs and pinning.
