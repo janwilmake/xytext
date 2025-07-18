@@ -1912,6 +1912,7 @@ ${files
               <span id="connectionStatus">Connected</span>
               <span class="btn" onclick="window.location.href='/logout'">Logout</span>
               <span class="btn" onclick="window.open('https://letmeprompt.com/from/'+window.location.href,'${currentPath}')">Prompt</span>
+              <span class="btn" onclick="window.open('https://${username}.xytext.com/'+window.location.pathname,'${currentPath}')">Preview</span>
             </span>
             <span id="cursorInfo">Line ${cursorLine}, Column ${cursorColumn}</span>
         </div>
