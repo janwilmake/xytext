@@ -42,3 +42,8 @@ TODO
 - ✅ Move 'logout' to footer, remove header too
 - ✅ For now, hide tabs
 - Entire tabs logic can be removed, we are leveraging Chromes state of open tabs and pinning.
+
+# other high-impact improvements
+
+- ✅ Don't expose SQL, just studio with `queryable-object`
+- ✅ Put button https://letmeprompt.com/from/{url} in footer

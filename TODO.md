@@ -1,8 +1,3 @@
-# V0
-
-- Don't expose SQL, just studio with `queryable-object`
-- Put button https://letmeprompt.com/from/{url} in footer
-
 # CRITICAL
 
 ## OAuth Login

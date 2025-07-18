@@ -1911,7 +1911,7 @@ ${files
             <span style="display:flex;flex-direction:row;gap:10px;">
               <span id="connectionStatus">Connected</span>
               <span class="btn" onclick="window.location.href='/logout'">Logout</span>
-              <span class="btn" onclick="window.location.href='https://letmeprompt.com/from/'+window.location.href">Prompt</span>
+              <span class="btn" onclick="window.open('https://letmeprompt.com/from/'+window.location.href,'${currentPath}')">Prompt</span>
             </span>
             <span id="cursorInfo">Line ${cursorLine}, Column ${cursorColumn}</span>
         </div>
