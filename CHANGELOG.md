@@ -48,3 +48,21 @@ An extension is desired anyways because I'd want to allow anyone to view what I'
 - ✅ Remove all tab stuff
 - ✅ Ensure it streams just one file content, not all files!
 - ✅ Problem 1: It streams all files it seems rather than one
+
+## View who's viewing/editing what (2025-07-19)
+
+- ✅ We get user details in frontend in `user` and in `sessions`, including profile pictures
+- ✅ Every logged in person viewing a page should send a heartbeat to that file when opened and when closed. do this in `this.sessions`
+- ✅ join, leave, and init get sent rich sessions that include `is_tab_foreground`
+- ✅ `ui_state` keeps `last_open_path` and `is_tab_foreground` per username
+  - when leaving the tab, should set `is_tab_foreground:false`
+  - when entering a tab, should set `is_tab_foreground:true` after 10ms delay (to prevent race conflict)
+  - when opening a new session, should set `is_tab_foreground:true`
+- ✅ to render explorer, turn sessions into a mapped object from `path` to unique users that have `is_tab_foreground:true`
+- ✅ In the explorer, render all unique users profile images after each file (replace \_400x400 with \_normal)
+- ✅ Separate sidepanel section listing all users.
+  - Shows image a bit bigger (50x50)
+  - Clicking username opens them on X.com/{username} in new tab with target {username}
+  - Follow/unfollow button sets key `follow_{firstSegment}`: null or string into localStorage. When set for current firstSegment, listener for session events looks up configured user `is_tab_foreground:true` page of configured username and navigate when it does not equal current page using `window.location.href`
+- ✅ After finding that it was incredibly glitchy, decided not to use localStorage and precalculate things on the server.
+- 🤔 the profile image render is still a little glitchy but it's a lot better now. it seems that the `init` updateUI rerender refreshes the entire image even though it was preloaded

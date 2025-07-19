@@ -32,7 +32,8 @@ interface Session {
   name: string;
   profile_image_url: string;
   isAdmin: boolean;
-  is_tab_foreground?: 0 | 1 | undefined;
+  /** Only calculated dynamically from UIState  */
+  is_tab_foreground?: 0 | 1;
 }
 
 interface WSMessage {
@@ -51,6 +52,7 @@ interface WSMessage {
   ui_state?: UIState;
   line?: number;
   column?: number;
+  is_tab_foreground?: 0 | 1;
 }
 
 interface FileNode extends VisibleNode {
@@ -81,12 +83,14 @@ interface UIState extends Record<string, SqlStorageValue> {
   explorer_scroll_top_path: string | null;
   last_open_path: string | null;
   is_tab_foreground: 0 | 1;
+  follow_username: string | null;
   updated_at: number;
 }
 
 interface ExplorerData {
   visible_nodes: VisibleNode[];
   sessions: Session[];
+  pathViewers: Record<string, Session[]>;
 }
 
 interface TokenResponse {
@@ -152,16 +156,16 @@ export class TextDO extends DurableObject {
     )
   `);
 
-    // UI state table
     this.sql.exec(`
-    CREATE TABLE IF NOT EXISTS user_ui (
-      username TEXT PRIMARY KEY,
-      explorer_scroll_top_path TEXT,
-      last_open_path TEXT,
-      is_tab_foreground INTEGER DEFAULT 0,
-      updated_at INTEGER DEFAULT (strftime('%s', 'now'))
-    )
-  `);
+  CREATE TABLE IF NOT EXISTS user_ui (
+    username TEXT PRIMARY KEY,
+    explorer_scroll_top_path TEXT,
+    last_open_path TEXT,
+    is_tab_foreground INTEGER DEFAULT 0,
+    follow_username TEXT,
+    updated_at INTEGER DEFAULT (strftime('%s', 'now'))
+  )
+`);
 
     // Indexes for performance
     this.sql.exec(
@@ -534,9 +538,25 @@ export class TextDO extends DurableObject {
         explorer_scroll_top_path: null,
         last_open_path: null,
         is_tab_foreground: 0,
+        follow_username: null,
         updated_at: 0,
       }
     );
+  }
+
+  handleFollowRedirect(username: string, targetPath: string) {
+    // Get all users who are following this username
+    const followers = this.sql
+      .exec(`SELECT username FROM user_ui WHERE follow_username = ?`, username)
+      .toArray() as { username: string }[];
+
+    // Update their last_open_path to match the followed user
+    for (const follower of followers) {
+      this.setUIState(follower.username, {
+        last_open_path: targetPath,
+        is_tab_foreground: 1,
+      });
+    }
   }
 
   setUIState(username: string, ui_state: Partial<UIState>): void {
@@ -545,13 +565,14 @@ export class TextDO extends DurableObject {
 
     this.sql.exec(
       `
-      INSERT OR REPLACE INTO user_ui (username, explorer_scroll_top_path, last_open_path, is_tab_foreground, updated_at)
-      VALUES (?, ?, ?, ?, strftime('%s', 'now'))
-    `,
+    INSERT OR REPLACE INTO user_ui (username, explorer_scroll_top_path, last_open_path, is_tab_foreground, follow_username, updated_at)
+    VALUES (?, ?, ?, ?, ?, strftime('%s', 'now'))
+  `,
       username,
       merged.explorer_scroll_top_path || null,
       merged.last_open_path || null,
-      merged.is_tab_foreground || 0
+      merged.is_tab_foreground || 0,
+      merged.follow_username || null
     );
   }
 
@@ -601,7 +622,7 @@ export class TextDO extends DurableObject {
   }
 
   renderExplorerHTML(explorerData: ExplorerData, currentPath: string): string {
-    const { visible_nodes, sessions } = explorerData;
+    const { visible_nodes, pathViewers } = explorerData;
 
     if (visible_nodes.length === 0) {
       return '<div class="no-files">No files found</div>';
@@ -621,6 +642,21 @@ export class TextDO extends DurableObject {
         </button>`
           : "";
 
+      // Get viewers for this path
+      const viewers = pathViewers[node.path] || [];
+      const viewerAvatars = viewers
+        .slice(0, 3)
+        .map(
+          (viewer) =>
+            `<img src="${viewer.profile_image_url.replace(
+              "_400x400",
+              "_normal"
+            )}" alt="${viewer.name}" title="${
+              viewer.name
+            }" class="viewer-avatar" crossorigin="anonymous" />`
+        )
+        .join("");
+
       return `
         <div class="explorer-item ${isActive ? "active" : ""} ${node.type}" 
              data-path="${node.path}" 
@@ -633,6 +669,9 @@ export class TextDO extends DurableObject {
           ${expandButton}
           <span class="explorer-icon">${icon}</span>
           <span class="explorer-name">${this.escapeHtml(node.name)}</span>
+          <span class="viewer-avatars">${viewerAvatars}${
+        viewers.length > 3 ? `+${viewers.length - 3}` : ""
+      }</span>
         </div>
       `;
     };
@@ -926,16 +965,33 @@ ${files
       });
     }
 
+    this.handleFollowRedirect(username, url.pathname);
+
     // Prepare data for the main app
     const visible_nodes = this.getVisibleNodes(firstSegment);
-    const explorerData = { visible_nodes, sessions: this.getRichSessions() };
+    const sessions = this.getRichSessions().map((s) => {
+      // ensure your own is_tab_foreground is correct
+      if (s.username !== user.username) {
+        return s;
+      }
+      if (s.path === url.pathname) {
+        return { ...s, is_tab_foreground: 1 as 1 };
+      }
+      return { ...s, is_tab_foreground: 0 as 0 };
+    });
+    const pathViewers = this.getPathViewers(sessions);
+    console.log({ sessions, pathViewers });
+    const explorerData = {
+      visible_nodes,
+      sessions,
+      pathViewers,
+    };
+
     const uiState = this.getUIState(firstSegment);
     const explorerHTML = this.renderExplorerHTML(explorerData, url.pathname);
-    const sessions = this.getRichSessions();
 
     return new Response(
       this.renderMainApp(
-        sessions,
         user,
         url.pathname,
         firstSegment,
@@ -974,6 +1030,23 @@ ${files
       }
     }
 
+    if (apiEndpoint === "set-follow-username" && request.method === "POST") {
+      const { follow_username } = requestData;
+      this.setUIState(username, { follow_username });
+      return new Response(JSON.stringify({ success: true }), {
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+
+    if (apiEndpoint === "get-follow-username" && request.method === "GET") {
+      const uiState = this.getUIState(username);
+      return new Response(
+        JSON.stringify({ follow_username: uiState.follow_username }),
+        {
+          headers: { "Content-Type": "application/json" },
+        }
+      );
+    }
     // Non-admin endpoints (accessible to anyone)
     if (apiEndpoint === "set-scroll-position" && request.method === "POST") {
       const { path } = requestData;
@@ -1139,6 +1212,27 @@ ${files
     return richSessions;
   }
 
+  getPathViewers(sessions: Session[]): Record<string, Session[]> {
+    const pathViewers: Record<string, Session[]> = {};
+    sessions.forEach((session) => {
+      if (session.is_tab_foreground) {
+        if (!pathViewers[session.path]) {
+          pathViewers[session.path] = [];
+        }
+        // Only add unique users per path
+        if (
+          !pathViewers[session.path].find(
+            (s) => s.username === session.username
+          )
+        ) {
+          pathViewers[session.path].push(session);
+        }
+      }
+    });
+
+    return pathViewers;
+  }
+
   handleWebSocket(
     request: Request,
     user: XUser,
@@ -1162,11 +1256,19 @@ ${files
       name,
       profile_image_url,
       isAdmin,
+      is_tab_foreground: 1,
     });
-    const sessions = this.getRichSessions();
 
+    // Set tab as foreground when opening
+    this.setUIState(username, {
+      last_open_path: url.pathname,
+      is_tab_foreground: 1,
+    });
+
+    const sessions = this.getRichSessions();
     const visible_nodes = this.getVisibleNodes(firstSegment);
-    const explorer_data = { visible_nodes, sessions };
+    const pathViewers = this.getPathViewers(sessions);
+    const explorer_data = { visible_nodes, sessions, pathViewers };
     const uiState = this.getUIState(firstSegment);
 
     // when joining, sessions are broadcasted
@@ -1182,6 +1284,9 @@ ${files
     // when closing, sessions are broadcasted again
     server.addEventListener("close", () => {
       this.sessions.delete(sessionId);
+      // Set tab as not foreground when closing
+      this.setUIState(username, { is_tab_foreground: 0 });
+
       const sessions = this.getRichSessions();
       this.broadcast(sessionId, {
         type: "leave",
@@ -1191,6 +1296,7 @@ ${files
         sessions,
         sessionCount: this.sessions.size,
       });
+      this.broadcastExplorerUpdate(firstSegment);
     });
 
     server.send(
@@ -1271,6 +1377,14 @@ ${files
             data.column,
             url.pathname
           );
+        } else if (
+          data.type === "set_tab_foreground" &&
+          data.is_tab_foreground !== undefined
+        ) {
+          this.setUIState(username, {
+            is_tab_foreground: data.is_tab_foreground,
+          });
+          this.broadcastExplorerUpdate(firstSegment);
         }
       } catch (err) {
         console.error("Error:", err);
@@ -1404,7 +1518,6 @@ ${files
   }
 
   renderMainApp(
-    sessions: Session[],
     user: XUser,
     currentPath: string,
     username: string,
@@ -1417,9 +1530,29 @@ ${files
     cursorLine: number,
     cursorColumn: number
   ): string {
+    const imageUrls = Array.from(
+      new Set(
+        explorerData.sessions
+          .map((x) => x.profile_image_url)
+          .map((url) => [url, url.replace("_400x400", "_normal")])
+          .flat()
+      )
+    );
+
+    // Get unique users from sessions
+    const uniqueUsers = Array.from(
+      new Map(explorerData.sessions.map((s) => [s.username, s])).values()
+    );
+
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
+${imageUrls
+  .map(
+    (url) =>
+      `    <link rel="preload" as="image" href="${url}" crossorigin="anonymous">`
+  )
+  .join("\n")}
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>${currentPath.split("/").pop()}</title>
@@ -1535,6 +1668,86 @@ ${files
             flex: 1;
             overflow-y: auto;
             padding: 8px 0;
+            display: flex;
+            flex-direction: column;
+        }
+        
+        .explorer-files {
+            flex: 1;
+        }
+        
+        .users-section {
+            border-top: 1px solid var(--border-color);
+            padding: 16px;
+        }
+        
+        .users-section h3 {
+            margin: 0 0 12px 0;
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--text-color);
+            opacity: 0.8;
+        }
+        
+        .user-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 8px;
+            padding: 4px 0;
+        }
+        
+        .user-avatar-large {
+            width: 50px;
+            height: 50px;
+            border-radius: 50%;
+            cursor: pointer;
+        }
+        
+        .user-info {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+        
+        .user-name {
+            font-size: 13px;
+            font-weight: 500;
+            color: var(--text-color);
+            cursor: pointer;
+            text-decoration: none;
+        }
+        
+        .user-name:hover {
+            text-decoration: underline;
+        }
+        
+        .user-username {
+            font-size: 11px;
+            color: var(--text-color);
+            opacity: 0.6;
+        }
+        
+        .follow-btn {
+            font-size: 11px;
+            padding: 4px 8px;
+            border: 1px solid var(--border-color);
+            background: var(--bg-color);
+            color: var(--text-color);
+            border-radius: 4px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+        
+        .follow-btn:hover {
+            background: var(--explorer-item-hover);
+        }
+        
+        .follow-btn.following {
+            background: var(--explorer-item-active);
+            color: white;
+            border-color: var(--explorer-item-active);
         }
         
         .explorer-item {
@@ -1594,6 +1807,20 @@ ${files
             flex: 1;
             overflow: hidden;
             text-overflow: ellipsis;
+        }
+        
+        .viewer-avatars {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            margin-left: 8px;
+        }
+        
+        .viewer-avatar {
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            border: 1px solid var(--border-color);
         }
         
         .status-bar {
@@ -1664,11 +1891,6 @@ ${files
             margin: 4px 0;
         }
 
-/*        .editor-container.loaded::before {
-            opacity: 0;
-            pointer-events: none;
-        }
-*/
         /* Ensure Monaco container matches theme immediately */
         .monaco-editor {
             background-color: var(--editor-bg) !important;
@@ -1691,7 +1913,46 @@ ${files
             <div class="explorer-container">
                 <div class="explorer-header">Explorer</div>
                 <div class="explorer-content" id="explorerContent">
-                    ${explorerHTML}
+                    <div class="explorer-files">
+                        ${explorerHTML}
+                    </div>
+                    
+                    <div class="users-section">
+                        <h3>Users</h3>
+                        ${uniqueUsers
+                          .map(
+                            (u) => `
+                            <div class="user-item">
+                                <img src="${u.profile_image_url}" 
+                                     alt="${u.name}" 
+                                     title="${u.name}" 
+                                     crossorigin="anonymous"
+                                     class="user-avatar-large" 
+                                     onclick="window.open('https://x.com/${
+                                       u.username
+                                     }', '${u.username}')" />
+                                <div class="user-info">
+                                    <a href="https://x.com/${u.username}" 
+                                       target="${u.username}" 
+                                       class="user-name">${u.name}</a>
+                                    <span class="user-username">@${
+                                      u.username
+                                    }</span>
+                                </div>
+                                ${
+                                  user.username !== u.username
+                                    ? `<button class="follow-btn" 
+                                        data-username="${u.username}"
+                                        onclick="toggleFollow('${u.username}')">
+                                    Follow
+                                </button>`
+                                    : ""
+                                }
+                            </div>
+                        `
+                          )
+                          .join("")}
+                    </div>
                 </div>
             </div>
         </div>
@@ -1725,16 +1986,19 @@ ${files
             ws: null,
             sessionId: null,
             version: 0,
+            followUsername: ${JSON.stringify(uiState.follow_username)},
             isAdmin: ${JSON.stringify(isAdmin)},
             username: ${JSON.stringify(username)},
             currentPath: ${JSON.stringify(currentPath)},
             explorerData: ${JSON.stringify(explorerData)},
             uiState: ${JSON.stringify(uiState)},
-            sessions: ${JSON.stringify(sessions)},
+            sessions: ${JSON.stringify(explorerData.sessions)},
             user: ${JSON.stringify(user)},
             contextMenuTarget: null,
             commandPaletteOpen: false,
             waitingForSecondKey: false,
+            followedUser: null,
+            firstSegment: ${JSON.stringify(username)},
             
             async init() {
                 await this.setupMonaco();
@@ -1742,8 +2006,53 @@ ${files
                 this.setupEventListeners();
                 this.setupScrollTracking();
                 this.setupDragAndDrop();
+                this.setupFollowSystem();
+                this.setupTabVisibility();
                 console.log('VSCode app initialized');
             },
+            
+            setupTabVisibility() {
+                // Handle tab visibility changes
+                document.addEventListener('visibilitychange', () => {
+                    const is_tab_foreground = document.hidden ? 0 : 1;
+                    this.setTabForeground(is_tab_foreground);
+                });
+                
+                // Handle window focus/blur
+                window.addEventListener('focus', () => {
+                    setTimeout(() => {
+                        this.setTabForeground(1);
+                    }, 10); // 10ms delay to prevent race conditions
+                });
+                
+            },
+            
+            async setTabForeground(is_tab_foreground) {
+                // Update via WebSocket
+                if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+                    this.ws.send(JSON.stringify({
+                        type: 'set_tab_foreground',
+                        is_tab_foreground
+                    }));
+                }
+            },
+            
+            setupFollowSystem() {
+                // followUsername is now passed from the backend
+                this.followedUser = this.followUsername;
+                this.updateFollowButtons();
+            },
+            
+            updateFollowButtons() {
+                document.querySelectorAll('.follow-btn').forEach(btn => {
+                    const username = btn.dataset.username;
+                    const isFollowing = this.followedUser === username;
+                    btn.textContent = isFollowing ? 'Unfollow' : 'Follow';
+                    btn.classList.toggle('following', isFollowing);
+                });
+            },
+            
+
             
             async setupMonaco() {
                 const editorContainer = document.getElementById('editor');
@@ -1808,11 +2117,8 @@ ${files
                 });
             },
             
-            
-
-            
             setupDragAndDrop() {
-                const explorerContent = document.getElementById('explorerContent');
+                const explorerContent = document.querySelector('.explorer-files');
                 let draggedElement = null;
                 
                 explorerContent.addEventListener('dragstart', (e) => {
@@ -1957,13 +2263,13 @@ ${files
             },
             
             setupEventListeners() {
-
-              document.addEventListener('keydown', (e) => {
-                  if ((e.metaKey || e.ctrlKey) && e.key === 'w' && this.editor && this.editor.hasTextFocus()) {
-                      e.preventDefault();
-                      this.closeCurrentTab();
-                  }
-              });
+                document.addEventListener('keydown', (e) => {
+                    if ((e.metaKey || e.ctrlKey) && e.key === 'w' && this.editor && this.editor.hasTextFocus()) {
+                        e.preventDefault();
+                        this.closeCurrentTab();
+                    }
+                });
+                
                 document.addEventListener('click', () => {
                     document.getElementById('contextMenu').style.display = 'none';
                 });
@@ -1978,10 +2284,11 @@ ${files
                 
                 window.handleExplorerClick = (path, type) => {
                     if (type === 'file') {
-                        //window.location.href = path;
-                        window.open(path,path).focus();
+                        window.open(path, path).focus();
+                        if(this.followedUser){
+                           window.toggleFollow(this.followUser);
+                        }
                     } else if (type === 'folder') {
-                        // Toggle expansion on folder click
                         window.toggleExpansion(path);
                     }
                 };
@@ -1995,22 +2302,24 @@ ${files
                     menu.style.top = event.pageY + 'px';
                 };
                 
-                
-                window.closeTab = async (path) => {
-                    const firstSegment = path.split('/')[1];
-                    const response = await fetch(\`/\${firstSegment}/__api/close-tab\`, {
+                window.toggleFollow = async (username) => {
+                    const newFollowState = this.followedUser === username ? null : username;
+                    
+                    // Update backend immediately
+                    const response = await fetch(\`/\${this.firstSegment}/__api/set-follow-username\`, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ path })
+                        body: JSON.stringify({ follow_username: newFollowState })
                     });
                     
                     if (response.ok) {
-                        const result = await response.json();
-                        if (path === this.currentPath) {
-                            window.location.href = result.nextPath;
-                        }
+                        this.followedUser = newFollowState;
+                        this.updateFollowButtons();
+                    } else {
+                        alert('Failed to update follow status');
                     }
                 };
+
                 
                 window.copyNode = async () => {
                     if (!this.contextMenuTarget) return;
@@ -2173,14 +2482,14 @@ ${files
             
             
             setupScrollTracking() {
-                const explorerContent = document.getElementById('explorerContent');
+                const explorerFiles = document.querySelector('.explorer-files');
                 let scrollTimeout;
                 
-                explorerContent.addEventListener('scroll', () => {
+                explorerFiles.addEventListener('scroll', () => {
                     clearTimeout(scrollTimeout);
                     scrollTimeout = setTimeout(() => {
-                        const scrollTop = explorerContent.scrollTop;
-                        const items = explorerContent.querySelectorAll('.explorer-item');
+                        const scrollTop = explorerFiles.scrollTop;
+                        const items = explorerFiles.querySelectorAll('.explorer-item');
                         
                         for (let item of items) {
                             if (item.offsetTop >= scrollTop) {
@@ -2224,24 +2533,32 @@ ${files
                     column: column
                 }));
             },
-            
-            handleMessage(message) {
-
-                switch (message.type) {
-                    case 'join':
+                      
+          handleMessage(message) {
+              switch (message.type) {
+                  case 'join':
                       console.log(message.username + ' has opened ' + message.path+ '; now ' + message.sessionCount + ' open sessions');
+                      this.sessions = message.sessions || this.sessions;
+                      this.followIfFollowing(); // Check for follow redirect
                       break;
-                    case 'leave':
+                  case 'leave':
                       console.log(message.username + ' has closed ' + message.path + '; now ' + message.sessionCount + ' open sessions');
+                      this.sessions = message.sessions || this.sessions;
                       break;
-                    
-                    case 'init':
-                        this.sessionId = message.sessionId;
-                        this.version = message.version;
-                        this.explorerData = message.explorer_data;
-                        this.uiState = message.ui_state;
-                        this.updateUI();
-                        break;
+                  
+                  case 'init':
+                      this.sessionId = message.sessionId;
+                      this.version = message.version;
+                      this.explorerData = message.explorer_data;
+                      this.uiState = message.ui_state;
+                      this.sessions = message.sessions;
+                      this.followIfFollowing(); // Check for follow redirect on init
+                      console.log("got init")
+                      // Only update explorer on init, not the entire UI
+                      // this.renderExplorer();
+                      this.updateFollowButtons(); // Just update follow buttons without re-rendering images
+                      break;
+
                     case 'text':
                         if (message.fromSession !== this.sessionId) {
                             const position = this.editor.getPosition();
@@ -2263,7 +2580,10 @@ ${files
                         }
                         break;
                     case 'explorer_update':
+                        console.log("got explorer_update")
                         this.explorerData = message.explorer_data;
+                        this.sessions = message.explorer_data?.sessions || this.sessions;
+                        this.followIfFollowing(); // Check for follow redirect on updates
                         this.updateUI();
                         break;
                     case 'error':
@@ -2274,21 +2594,90 @@ ${files
             
             updateUI() {                
                 // Update explorer
-                const explorerContent = document.getElementById('explorerContent');
-                if (explorerContent) {
+                const explorerFiles = document.querySelector('.explorer-files');
+                if (explorerFiles) {
                     this.renderExplorer();
                 }
+                
+                // Update users section
+                this.updateUsersSection();
             },
-               
+
+            followIfFollowing() {
+                if (!this.followedUser) return;
+                
+                const followedSession = this.sessions.find(s => 
+                    s.is_tab_foreground && this.followedUser === s.username
+                );
+                
+                if (followedSession && followedSession.path !== this.currentPath) {
+                    console.log(\`Following \${this.followedUser} to \${followedSession.path}\`);
+                    // Use replace instead of href to avoid adding to history
+                    window.location.replace(followedSession.path);
+                }
+            },
+
+                        
+            updateUsersSection() {
+                const uniqueUsers = Array.from(
+                    new Map(this.sessions.map(s => [s.username, s])).values()
+                );
+                
+                const usersSection = document.querySelector('.users-section');
+                if (!usersSection) return;
+                
+                // Check if we need to update - compare user lists
+                const existingUsers = Array.from(usersSection.querySelectorAll('.user-item')).map(item => {
+                    const img = item.querySelector('.user-avatar-large');
+                    return img ? img.alt : null;
+                }).filter(Boolean);
+                
+                const newUsers = uniqueUsers.map(u => u.name);
+                
+                // Only re-render if users actually changed
+                if (JSON.stringify(existingUsers.sort()) === JSON.stringify(newUsers.sort())) {
+                    this.updateFollowButtons(); // Just update buttons, don't re-render images
+                    return;
+                }
+                
+                const usersHTML = \`
+                    <h3>Users</h3>
+                    \${uniqueUsers.map(user => \`
+                        <div class="user-item">
+                            <img src="\${user.profile_image_url}" 
+                                alt="\${user.name}" 
+                                title="\${user.name}" 
+                                crossorigin="anonymous"
+                                class="user-avatar-large" 
+                                onclick="window.open('https://x.com/\${user.username}', '\${user.username}')" />
+                            <div class="user-info">
+                                <a href="https://x.com/\${user.username}" 
+                                  target="\${user.username}" 
+                                  class="user-name">\${user.name}</a>
+                                <span class="user-username">@\${user.username}</span>
+                            </div>
+                            \${user.username !== window.vscodeApp.user.username ? \`<button class="follow-btn" 
+                                    data-username="\${user.username}"
+                                    onclick="toggleFollow('\${user.username}')">
+                                Follow
+                            </button>\`:''}
+                        </div>
+                    \`).join('')}
+                \`;
+                
+                usersSection.innerHTML = usersHTML;
+                this.updateFollowButtons();
+            },
+
 
             renderExplorer() {
-                const explorerContent = document.getElementById('explorerContent');
-                if (!explorerContent || !this.explorerData) return;
+                const explorerFiles = document.querySelector('.explorer-files');
+                if (!explorerFiles || !this.explorerData) return;
                 
-                const { visible_nodes } = this.explorerData;
+                const { visible_nodes, pathViewers } = this.explorerData;
                 
                 if (visible_nodes.length === 0) {
-                    explorerContent.innerHTML = '<div class="no-files">No files found</div>';
+                    explorerFiles.innerHTML = '<div class="no-files">No files found</div>';
                     return;
                 }
                 
@@ -2304,6 +2693,17 @@ ${files
                             \${node.is_expanded ? chevronDownSvg : chevronRightSvg}
                         </button>\` : '';
                     
+                    // Get viewers for this path
+                    const viewers = pathViewers[node.path] || [];
+                    const viewerAvatars = viewers.slice(0,3)
+                        .map(viewer => 
+                            \`<img src="\${viewer.profile_image_url.replace('_400x400', '_normal')}" 
+                                  alt="\${viewer.name}" 
+                                  crossorigin="anonymous"
+                                  title="\${viewer.name}" 
+                                  class="viewer-avatar" />\`)
+                        .join('');
+                    
                     return \`
                         <div class="explorer-item \${isActive ? 'active' : ''} \${node.type}" 
                             data-path="\${node.path}" 
@@ -2314,6 +2714,7 @@ ${files
                             \${expandButton}
                             <span class="explorer-icon">\${icon}</span>
                             <span class="explorer-name">\${this.escapeHtml(node.name)}</span>
+                            <span class="viewer-avatars">\${viewerAvatars}\${viewers.length > 3 ? \`+\${viewers.length-3}\`:''}</span>
                         </div>
                     \`;
                 };
@@ -2352,7 +2753,7 @@ ${files
                 };
                 
                 const username = visible_nodes[0]?.path.split('/')[1] || '';
-                explorerContent.innerHTML = renderChildren(\`/\${username}\`, 0);
+                explorerFiles.innerHTML = renderChildren(\`/\${username}\`, 0);
             },
 
             escapeHtml(text) {
@@ -2411,9 +2812,11 @@ ${files
   broadcastExplorerUpdate(username: string): void {
     const visible_nodes = this.getVisibleNodes(username);
     const sessions = this.getRichSessions();
+
+    const pathViewers = this.getPathViewers(sessions);
     const message: WSMessage = {
       type: "explorer_update",
-      explorer_data: { visible_nodes, sessions },
+      explorer_data: { visible_nodes, sessions, pathViewers },
     };
     const messageStr = JSON.stringify(message);
     //@ts-ignore
