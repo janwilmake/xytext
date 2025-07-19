@@ -1904,6 +1904,7 @@ ${imageUrls
             color: #ffffff;
             cursor: pointer;
             font-size: 12px;
+            text-decoration:none;
         }
         
         .btn:hover {
@@ -2019,7 +2020,7 @@ ${imageUrls
               <span id="connectionStatus">Connected</span>
               <span class="btn" onclick="window.location.href='/logout'">Logout</span>
               <span class="btn" onclick="window.open('https://letmeprompt.com/from/'+window.location.href,'${currentPath}')">Prompt</span>
-              <a href="/studio" target="studio">Studio</a>
+              <a href="/studio" class="btn" target="studio">Studio</a>
               <span class="btn" onclick="window.open('https://${username}.xytext.com'+window.location.pathname.replace('${username}/',''),'${username}.xytext.com/${currentPath}')">Preview</span>
             </span>
             <span id="cursorInfo">Line ${cursorLine}, Column ${cursorColumn}</span>
