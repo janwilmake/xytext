@@ -15,6 +15,443 @@ const chevronDownSvg = `<svg width="16" height="16" viewBox="0 0 16 16" fill="no
 <path fill-rule="evenodd" clip-rule="evenodd" d="M7.97612 10.0719L12.3334 5.7146L12.9521 6.33332L8.28548 11L7.66676 11L3.0001 6.33332L3.61882 5.7146L7.97612 10.0719Z" fill="currentColor"/>
 </svg>`;
 
+const LANDING_HTML = `<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>XYText - Your Agent-Friendly Editor in the Cloud</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text', sans-serif;
+            background: linear-gradient(135deg, #1a1a1a 0%, #2d2d2d 100%);
+            color: #f5f5f7;
+            line-height: 1.6;
+            overflow-x: hidden;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 0 24px;
+        }
+
+        /* Header */
+        .header {
+            padding: 24px 0;
+            backdrop-filter: blur(20px);
+            background: rgba(29, 29, 31, 0.72);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+
+        .nav {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .logo {
+            font-size: 24px;
+            font-weight: 700;
+            color: #007aff;
+            text-decoration: none;
+            letter-spacing: -0.02em;
+        }
+
+        .nav-links {
+            display: flex;
+            gap: 32px;
+            align-items: center;
+        }
+
+        .nav-link {
+            color: #f5f5f7;
+            text-decoration: none;
+            font-weight: 500;
+            transition: all 0.3s ease;
+            font-size: 17px;
+        }
+
+        .nav-link:hover {
+            color: #007aff;
+            transform: translateY(-1px);
+        }
+
+        /* Hero Section */
+        .hero {
+            padding: 120px 0;
+            text-align: center;
+            background: radial-gradient(circle at 50% 0%, rgba(0, 122, 255, 0.1) 0%, transparent 50%);
+        }
+
+        .hero-title {
+            font-size: clamp(48px, 8vw, 96px);
+            font-weight: 700;
+            background: linear-gradient(135deg, #f5f5f7 0%, #007aff 50%, #34c759 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            margin-bottom: 24px;
+            letter-spacing: -0.04em;
+            line-height: 1.1;
+        }
+
+        .hero-subtitle {
+            font-size: 24px;
+            color: #a1a1a6;
+            margin-bottom: 48px;
+            font-weight: 400;
+            max-width: 800px;
+            margin-left: auto;
+            margin-right: auto;
+        }
+
+        .hero-buttons {
+            display: flex;
+            gap: 24px;
+            justify-content: center;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #007aff 0%, #5856d6 100%);
+            color: white;
+            padding: 16px 32px;
+            border-radius: 50px;
+            text-decoration: none;
+            font-weight: 600;
+            font-size: 17px;
+            transition: all 0.3s ease;
+            border: none;
+            cursor: pointer;
+            box-shadow: 0 8px 30px rgba(0, 122, 255, 0.3);
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 12px 40px rgba(0, 122, 255, 0.4);
+        }
+
+        .btn-secondary {
+            background: rgba(255, 255, 255, 0.1);
+            color: #f5f5f7;
+            padding: 16px 32px;
+            border-radius: 50px;
+            text-decoration: none;
+            font-weight: 600;
+            font-size: 17px;
+            transition: all 0.3s ease;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            backdrop-filter: blur(10px);
+        }
+
+        .btn-secondary:hover {
+            background: rgba(255, 255, 255, 0.2);
+            transform: translateY(-2px);
+        }
+
+        /* Features Section */
+        .features {
+            padding: 120px 0;
+            background: rgba(255, 255, 255, 0.02);
+        }
+
+        .features-title {
+            font-size: 48px;
+            font-weight: 700;
+            text-align: center;
+            margin-bottom: 80px;
+            color: #f5f5f7;
+            letter-spacing: -0.02em;
+        }
+
+        .features-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+            gap: 40px;
+        }
+
+        .feature-card {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 20px;
+            padding: 40px;
+            backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            transition: all 0.3s ease;
+        }
+
+        .feature-card:hover {
+            transform: translateY(-5px);
+            background: rgba(255, 255, 255, 0.08);
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+        }
+
+        .feature-icon {
+            width: 60px;
+            height: 60px;
+            background: linear-gradient(135deg, #007aff 0%, #5856d6 100%);
+            border-radius: 16px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 28px;
+            margin-bottom: 24px;
+        }
+
+        .feature-title {
+            font-size: 24px;
+            font-weight: 700;
+            margin-bottom: 16px;
+            color: #f5f5f7;
+        }
+
+        .feature-description {
+            color: #a1a1a6;
+            font-size: 17px;
+            line-height: 1.6;
+        }
+
+        /* Demo Section */
+        .demo {
+            padding: 120px 0;
+            text-align: center;
+        }
+
+        .demo-title {
+            font-size: 48px;
+            font-weight: 700;
+            margin-bottom: 24px;
+            color: #f5f5f7;
+            letter-spacing: -0.02em;
+        }
+
+        .demo-description {
+            font-size: 20px;
+            color: #a1a1a6;
+            margin-bottom: 48px;
+            max-width: 600px;
+            margin-left: auto;
+            margin-right: auto;
+        }
+
+        .demo-preview {
+            background: rgba(0, 0, 0, 0.4);
+            border-radius: 20px;
+            padding: 20px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(20px);
+            margin-bottom: 40px;
+            overflow: hidden;
+        }
+
+        .demo-window {
+            background: #1d1d1f;
+            border-radius: 12px;
+            padding: 12px;
+            border: 1px solid #2d2d2d;
+        }
+
+        .demo-header {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 16px;
+            padding: 8px 12px;
+            background: #2d2d2d;
+            border-radius: 8px;
+        }
+
+        .demo-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+        }
+
+        .demo-dot.red { background: #ff5f57; }
+        .demo-dot.yellow { background: #ffbd2e; }
+        .demo-dot.green { background: #28ca42; }
+
+        .demo-code {
+            font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
+            font-size: 14px;
+            color: #a1a1a6;
+            text-align: left;
+            line-height: 1.6;
+            white-space: pre-wrap;
+        }
+
+        /* Footer */
+        .footer {
+            padding: 80px 0 40px;
+            text-align: center;
+            border-top: 1px solid rgba(255, 255, 255, 0.1);
+            background: rgba(0, 0, 0, 0.2);
+        }
+
+        .footer-links {
+            display: flex;
+            justify-content: center;
+            gap: 40px;
+            margin-bottom: 32px;
+            flex-wrap: wrap;
+        }
+
+        .footer-link {
+            color: #a1a1a6;
+            text-decoration: none;
+            font-size: 17px;
+            transition: color 0.3s ease;
+        }
+
+        .footer-link:hover {
+            color: #007aff;
+        }
+
+        .footer-text {
+            color: #6e6e73;
+            font-size: 15px;
+        }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            .hero {
+                padding: 80px 0;
+            }
+
+            .hero-buttons {
+                flex-direction: column;
+            }
+
+            .features {
+                padding: 80px 0;
+            }
+
+            .features-grid {
+                grid-template-columns: 1fr;
+                gap: 24px;
+            }
+
+            .feature-card {
+                padding: 32px 24px;
+            }
+
+            .demo {
+                padding: 80px 0;
+            }
+
+            .nav-links {
+                gap: 16px;
+            }
+
+            .nav-link {
+                font-size: 15px;
+            }
+        }
+
+        /* Animations */
+        @keyframes fadeInUp {
+            from {
+                opacity: 0;
+                transform: translateY(30px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .hero-title,
+        .hero-subtitle,
+        .hero-buttons {
+            animation: fadeInUp 0.8s ease-out forwards;
+        }
+
+        .hero-subtitle {
+            animation-delay: 0.2s;
+        }
+
+        .hero-buttons {
+            animation-delay: 0.4s;
+        }
+    </style>
+</head>
+<body>
+    <header class="header">
+        <div class="container">
+            <nav class="nav">
+                <a href="/" class="logo">XYText</a>
+                <div class="nav-links">
+                    <a href="/janwilmake" class="nav-link">Demo</a>
+                    <a href="https://x.com/search?q=from%3Ajanwilmake%20xytext" class="nav-link">Discuss</a>
+                    <a href="/login" class="btn-primary">Get Started</a>
+                </div>
+            </nav>
+        </div>
+    </header>
+
+    <main>
+        <section class="hero">
+            <div class="container">
+                <h1 class="hero-title">Your Agent-Friendly Editor in the Cloud</h1>
+                <p class="hero-subtitle">Collaborative text editing designed for humans and AI agents. Write, share, and collaborate in real-time with the power of the cloud.</p>
+                <div class="hero-buttons">
+                    <a href="/login" class="btn-primary">Login with X</a>
+                    <a href="/janwilmake" class="btn-secondary">See Example</a>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <footer class="footer">
+        <div class="container">
+            <div class="footer-links">
+                <a href="https://x.com/search?q=from%3Ajanwilmake%20xytext" class="footer-link">Discuss</a>
+                <a href="/janwilmake" class="footer-link">Example</a>
+                <a href="/login" class="footer-link">Login</a>
+            </div>
+            <p class="footer-text">&copy; 2025 XYText. Built with ❤️ for humans and agents.</p>
+        </div>
+    </footer>
+
+    <script>
+        // Smooth scrolling for anchor links
+        document.querySelectorAll('a[href^="#"]').forEach(anchor => {
+            anchor.addEventListener('click', function (e) {
+                e.preventDefault();
+                const target = document.querySelector(this.getAttribute('href'));
+                if (target) {
+                    target.scrollIntoView({
+                        behavior: 'smooth',
+                        block: 'start'
+                    });
+                }
+            });
+        });
+
+        // Add some interactive elements
+        const featureCards = document.querySelectorAll('.feature-card');
+        featureCards.forEach(card => {
+            card.addEventListener('mouseenter', () => {
+                card.style.transform = 'translateY(-8px) scale(1.02)';
+            });
+            card.addEventListener('mouseleave', () => {
+                card.style.transform = 'translateY(0) scale(1)';
+            });
+        });
+    </script>
+</body>
+</html>
+`;
 interface Env {
   TEXT: DurableObjectNamespace<TextDO & QueryableHandler>;
   ADMIN_SECRET: string;
@@ -974,7 +1411,7 @@ ${files
         });
       }
 
-      return new Response(this.renderLandingPage(), {
+      return new Response(LANDING_HTML, {
         headers: { "content-type": "text/html;charset=utf8" },
       });
     }
@@ -1548,30 +1985,6 @@ ${files
         error instanceof Error ? error.message : "Unknown error";
       return new Response(`Login failed: ${errorMessage}`, { status: 500 });
     }
-  }
-
-  renderLandingPage(): string {
-    return `<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>XYText</title>
-    <style>
-        body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; margin: 0; width: 100vw; height: 100vh; display: flex; align-items: center; justify-content: center; text-align: center; }
-        h1 { color: #333; }
-        .btn { background: #007bff; color: white; padding: 10px 20px; text-decoration: none; border-radius: 4px; display: inline-block; margin: 10px 0; }
-        .btn:hover { background: #0056b3; }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <h1>Your Agent-Friendly Editor in the Cloud</h1>
-        <p>Works best in Chromium-based browsers</p>
-        <a href="/login" class="btn">Login with X</a>
-    </div>
-</body>
-</html>`;
   }
 
   renderMainApp(
