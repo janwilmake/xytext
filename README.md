@@ -4,12 +4,7 @@ Collaborative Text Editor with X OAuth Authentication
 - X OAuth for write permissions
 - SQLite storage for persistence
 
-Icons: https://github.com/microsoft/vscode-icons/tree/main/icons/dark
-
-The first version still had lot of bugs. Finally, it became a lot easier after:
-
-- moving to typescript
-- putting all logic inside of the durable object to just have a single fetch handler where everything happens, rather than several.
+Every user gets their own Database with SQLite API: `GET /exec?query=SELECT%20path%20FROM%20nodes[&binding=1&binding=2]`. In the browser cookies ensure the user will be authenticated for this; over API the Authorization Bearer token must match the users API key.
 
 License: MIT
 

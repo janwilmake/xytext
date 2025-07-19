@@ -34,16 +34,17 @@ https://letmeprompt.com/rules-httpsuithu-ys708o0
 
 An extension is desired anyways because I'd want to allow anyone to view what I'm doing in the browser (and store it for ai-agent context-use)
 
-TODO
-
 - ✅ every html should have filename as as title
 - ✅ sidebar links use `window.open(path,path).focus()`
 - ✅ Extension-based favicon
 - ✅ Move 'logout' to footer, remove header too
 - ✅ For now, hide tabs
-- Entire tabs logic can be removed, we are leveraging Chromes state of open tabs and pinning.
-
-# other high-impact improvements
-
+- ✅ Entire tabs logic can be removed, we are leveraging Chromes state of open tabs and pinning.
 - ✅ Don't expose SQL, just studio with `queryable-object`
 - ✅ Put button https://letmeprompt.com/from/{url} in footer
+
+## Reduce lines of code in main file (2025-07-19)
+
+- ✅ Remove all tab stuff
+- ✅ Ensure it streams just one file content, not all files!
+- ✅ Problem 1: It streams all files it seems rather than one

@@ -8,13 +8,13 @@ import {
   studioMiddleware,
 } from "queryable-object";
 import { DurableObject } from "cloudflare:workers";
+
 const chevronRightSvg = `<svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
 <path fill-rule="evenodd" clip-rule="evenodd" d="M10.0719 8.02397L5.7146 3.66666L6.33332 3.04794L11 7.71461V8.33333L6.33332 13L5.7146 12.3813L10.0719 8.02397Z" fill="currentColor"/></svg>`;
 const chevronDownSvg = `<svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
 <path fill-rule="evenodd" clip-rule="evenodd" d="M7.97612 10.0719L12.3334 5.7146L12.9521 6.33332L8.28548 11L7.66676 11L3.0001 6.33332L3.61882 5.7146L7.97612 10.0719Z" fill="currentColor"/>
 </svg>`;
-const pinSvg = `<svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M4.10002 1.08186L3.72499 1.94778L5.18409 3.40687L4.53635 7.42274C4.01662 7.60746 3.55856 7.93327 3.21358 8.36365C2.87267 8.79115 2.65993 9.30651 2.59998 9.85L3.09777 10.3478L6.91588 10.2932L6.9091 16L7.94543 14.9637L7.94548 10.2728L11.3 10.2319L11.8181 9.71367C11.7748 9.17983 11.5742 8.67084 11.2417 8.25096C10.9092 7.83107 10.4597 7.51912 9.95002 7.35457L9.42496 3.35227L10.925 1.85227L10.5772 1L4.10002 1.08186ZM8.5523 2.80687L8.40224 3.24324L9.00224 7.75686L9.30907 8.1455C9.88043 8.32423 10.369 8.70152 10.6864 9.20914L7.95912 9.20914L3.77272 9.26369C4.10766 8.75069 4.60442 8.36429 5.18409 8.16594L5.5046 7.76369L6.23411 3.22959L6.0977 2.80687L5.31359 2.02277L9.34997 1.96825L8.5523 2.80687Z" fill="currentColor"/></svg>`;
-const headline = "Share Your Prompting In Real-Time";
+
 interface Env {
   TEXT: DurableObjectNamespace<TextDO & QueryableHandler>;
   ADMIN_SECRET: string;
@@ -29,7 +29,10 @@ interface Session {
   webSocket: WebSocket;
   path: string;
   username: string;
+  name: string;
+  profile_image_url: string;
   isAdmin: boolean;
+  is_tab_foreground?: 0 | 1 | undefined;
 }
 
 interface WSMessage {
@@ -42,6 +45,7 @@ interface WSMessage {
   username?: string;
   fromSession?: string;
   path?: string;
+  sessions?: Session[];
   files?: FileNode[];
   explorer_data?: ExplorerData;
   ui_state?: UIState;
@@ -49,7 +53,7 @@ interface WSMessage {
   column?: number;
 }
 
-interface FileNode extends Record<string, SqlStorageValue> {
+interface FileNode extends VisibleNode {
   id: number;
   path: string;
   name: string;
@@ -60,21 +64,29 @@ interface FileNode extends Record<string, SqlStorageValue> {
   updated_at: number;
   content?: string;
   is_expanded: 0 | 1;
-  is_tab_open: 0 | 1;
-  is_tab_pinned: 0 | 1;
   last_cursor_line: number;
   last_cursor_column: number;
+}
+
+/** Subset of FileNode for Explorer */
+interface VisibleNode extends Record<string, SqlStorageValue> {
+  path: string;
+  parent_path: string;
+  type: "file" | "folder";
+  name: string;
+  is_expanded: 0 | 1;
 }
 
 interface UIState extends Record<string, SqlStorageValue> {
   explorer_scroll_top_path: string | null;
   last_open_path: string | null;
+  is_tab_foreground: 0 | 1;
+  updated_at: number;
 }
 
 interface ExplorerData {
-  visible_nodes: FileNode[];
-  open_tabs: FileNode[];
-  pinned_tabs: FileNode[];
+  visible_nodes: VisibleNode[];
+  sessions: Session[];
 }
 
 interface TokenResponse {
@@ -83,13 +95,12 @@ interface TokenResponse {
   expires_in: number;
   refresh_token?: string;
 }
-
-interface UserResponse {
-  data: {
-    username: string;
-    id: string;
-    name: string;
-  };
+interface XUser {
+  id: string;
+  name: string;
+  username: string;
+  profile_image_url: string;
+  verified?: boolean;
 }
 
 async function generateRandomString(length: number): Promise<string> {
@@ -136,8 +147,6 @@ export class TextDO extends DurableObject {
       updated_at INTEGER DEFAULT (strftime('%s', 'now')),
       content TEXT,
       is_expanded BOOLEAN DEFAULT FALSE,
-      is_tab_open BOOLEAN DEFAULT FALSE,
-      is_tab_pinned BOOLEAN DEFAULT FALSE,
       last_cursor_line INTEGER DEFAULT 1,
       last_cursor_column INTEGER DEFAULT 1
     )
@@ -145,10 +154,11 @@ export class TextDO extends DurableObject {
 
     // UI state table
     this.sql.exec(`
-    CREATE TABLE IF NOT EXISTS ui_state (
+    CREATE TABLE IF NOT EXISTS user_ui (
       username TEXT PRIMARY KEY,
       explorer_scroll_top_path TEXT,
       last_open_path TEXT,
+      is_tab_foreground INTEGER DEFAULT 0,
       updated_at INTEGER DEFAULT (strftime('%s', 'now'))
     )
   `);
@@ -164,12 +174,6 @@ export class TextDO extends DurableObject {
     );
     this.sql.exec(
       `CREATE INDEX IF NOT EXISTS idx_expanded ON nodes(is_expanded)`
-    );
-    this.sql.exec(
-      `CREATE INDEX IF NOT EXISTS idx_tab_open ON nodes(is_tab_open)`
-    );
-    this.sql.exec(
-      `CREATE INDEX IF NOT EXISTS idx_tab_pinned ON nodes(is_tab_pinned)`
     );
   }
 
@@ -228,10 +232,10 @@ export class TextDO extends DurableObject {
     // Insert or update the file with cursor position
     this.sql.exec(
       `
-    INSERT OR REPLACE INTO nodes (path, name, parent_path, type, size, content, created_at, updated_at, is_tab_open, last_cursor_line, last_cursor_column)
+    INSERT OR REPLACE INTO nodes (path, name, parent_path, type, size, content, created_at, updated_at, last_cursor_line, last_cursor_column)
     VALUES (?, ?, ?, 'file', ?, ?, 
       COALESCE((SELECT created_at FROM nodes WHERE path = ?), ?), 
-      ?, TRUE, ?, ?)
+      ?, ?, ?)
   `,
       path,
       name,
@@ -472,7 +476,8 @@ export class TextDO extends DurableObject {
     return result.rowsWritten > 0;
   }
 
-  getExpandedFolders(username: string): string[] {
+  getVisibleNodes(username: string): VisibleNode[] {
+    // First, get all expanded folders
     const folders = this.sql
       .exec(
         `
@@ -484,12 +489,7 @@ export class TextDO extends DurableObject {
       )
       .toArray() as { path: string }[];
 
-    return folders.map((f) => f.path);
-  }
-
-  getVisibleNodes(username: string): FileNode[] {
-    // First, get all expanded folders
-    const expandedFolders = this.getExpandedFolders(username);
+    const expandedFolders = folders.map((f) => f.path);
 
     // Always include root level
     const rootCondition = `parent_path IS NULL OR parent_path = '/${username}'`;
@@ -502,59 +502,15 @@ export class TextDO extends DurableObject {
     }
 
     const query = `
-      SELECT * FROM nodes 
+      SELECT path,parent_path,type,name,is_expanded FROM nodes 
       WHERE (path LIKE ? OR path = ?) AND (${visibleCondition})
       ORDER BY parent_path, type DESC, name ASC
     `;
 
     const params = [`/${username}/%`, `/${username}`, ...expandedFolders];
-    const nodes = this.sql.exec<FileNode>(query, ...params).toArray();
+    const nodes = this.sql.exec<VisibleNode>(query, ...params).toArray();
 
     return nodes;
-  }
-
-  getOpenTabs(username: string): FileNode[] {
-    const tabs = this.sql
-      .exec<FileNode>(
-        `
-      SELECT * FROM nodes 
-      WHERE is_tab_open = TRUE AND type = 'file' AND path LIKE ?
-      ORDER BY is_tab_pinned DESC
-    `,
-        `/${username}/%`
-      )
-      .toArray();
-
-    return tabs;
-  }
-
-  getPinnedTabs(username: string): FileNode[] {
-    const tabs = this.sql
-      .exec(
-        `
-      SELECT * FROM nodes 
-      WHERE path LIKE ? AND type = 'file' AND is_tab_pinned = TRUE
-      ORDER BY updated_at DESC
-    `,
-        `/${username}/%`
-      )
-      .toArray() as FileNode[];
-
-    return tabs;
-  }
-
-  getNextOpenTab(username: string, currentPath: string): string | null {
-    const openTabs = this.getOpenTabs(username);
-    const currentIndex = openTabs.findIndex((tab) => tab.path === currentPath);
-
-    if (currentIndex === -1 || openTabs.length <= 1) {
-      return null;
-    }
-
-    // Return next tab or first tab if current is last
-    const nextIndex =
-      currentIndex + 1 >= openTabs.length ? 0 : currentIndex + 1;
-    return openTabs[nextIndex].path;
   }
 
   toggleExpansion(path: string): void {
@@ -568,61 +524,19 @@ export class TextDO extends DurableObject {
     );
   }
 
-  openTab(path: string, line: number = 1, column: number = 1): void {
-    this.sql.exec(
-      `
-      UPDATE nodes 
-      SET is_tab_open = TRUE, updated_at = strftime('%s', 'now'), last_cursor_line = ?, last_cursor_column = ?
-      WHERE path = ? AND type = 'file'
-    `,
-      line,
-      column,
-      path
-    );
-  }
-
-  closeTab(path: string): void {
-    this.sql.exec(
-      `UPDATE nodes SET is_tab_open = FALSE, updated_at = strftime('%s', 'now') WHERE path = ? AND type = 'file'`,
-      path
-    );
-  }
-
-  togglePinTab(path: string): void {
-    // Get current pinned state
-    const current = this.sql
-      .exec(
-        `SELECT is_tab_pinned FROM nodes WHERE path = ? AND type = 'file'`,
-        path
-      )
-      .toArray()[0] as { is_tab_pinned: 0 | 1 } | undefined;
-
-    if (!current) return;
-
-    const newPinnedState = current.is_tab_pinned ? 0 : 1;
-
-    this.sql.exec(
-      `
-      UPDATE nodes 
-      SET is_tab_pinned = ?, is_tab_open = TRUE, updated_at = strftime('%s', 'now')
-      WHERE path = ? AND type = 'file'
-    `,
-      newPinnedState,
-      path
-    );
-  }
-
   getUIState(username: string): UIState {
     const result = this.sql
-      .exec(
-        `
-      SELECT explorer_scroll_top_path, last_open_path FROM ui_state WHERE username = ?
-    `,
-        username
-      )
+      .exec(`SELECT * FROM user_ui WHERE username = ?`, username)
       .toArray()[0] as UIState | undefined;
 
-    return result || { explorer_scroll_top_path: null, last_open_path: null };
+    return (
+      result || {
+        explorer_scroll_top_path: null,
+        last_open_path: null,
+        is_tab_foreground: 0,
+        updated_at: 0,
+      }
+    );
   }
 
   setUIState(username: string, ui_state: Partial<UIState>): void {
@@ -631,33 +545,31 @@ export class TextDO extends DurableObject {
 
     this.sql.exec(
       `
-      INSERT OR REPLACE INTO ui_state (username, explorer_scroll_top_path, last_open_path, updated_at)
-      VALUES (?, ?, ?, strftime('%s', 'now'))
+      INSERT OR REPLACE INTO user_ui (username, explorer_scroll_top_path, last_open_path, is_tab_foreground, updated_at)
+      VALUES (?, ?, ?, ?, strftime('%s', 'now'))
     `,
       username,
       merged.explorer_scroll_top_path || null,
-      merged.last_open_path || null
+      merged.last_open_path || null,
+      merged.is_tab_foreground || 0
     );
   }
 
-  getExplorerData(username: string): ExplorerData {
-    const visible_nodes = this.getVisibleNodes(username);
-    const open_tabs = this.getOpenTabs(username);
-    const pinned_tabs = this.getPinnedTabs(username);
-
-    return {
-      visible_nodes,
-      open_tabs,
-      pinned_tabs,
+  async getUserFromToken(token: string): Promise<XUser> {
+    const anonymous: XUser = {
+      username: "anonymous",
+      id: "0",
+      name: "Anonymous",
+      verified: false,
+      // TODO: get this
+      profile_image_url: "/anonymous.png",
     };
-  }
-
-  async getUsernameFromToken(token: string): Promise<string> {
-    if (!token) return "anonymous";
-    const username = await this.env.KV.get(
-      `token:${decodeURIComponent(token)}`
+    if (!token) return anonymous;
+    const user = await this.env.KV.get<XUser>(
+      `v2:token:${decodeURIComponent(token)}`,
+      "json"
     );
-    return username || "anonymous";
+    return user || anonymous;
   }
 
   generateLlmsTxt(username: string): string {
@@ -689,13 +601,13 @@ export class TextDO extends DurableObject {
   }
 
   renderExplorerHTML(explorerData: ExplorerData, currentPath: string): string {
-    const { visible_nodes } = explorerData;
+    const { visible_nodes, sessions } = explorerData;
 
     if (visible_nodes.length === 0) {
       return '<div class="no-files">No files found</div>';
     }
 
-    const renderNode = (node: FileNode, level: number = 0): string => {
+    const renderNode = (node: VisibleNode, level: number = 0): string => {
       const isActive = node.path === currentPath;
       const indent = level * 20;
       const icon = node.type === "folder" ? "" : "📄";
@@ -726,8 +638,8 @@ export class TextDO extends DurableObject {
     };
 
     // Build hierarchical structure
-    const nodesByPath = new Map<string, FileNode>();
-    const nodesByParent = new Map<string | null, FileNode[]>();
+    const nodesByPath = new Map<string, VisibleNode>();
+    const nodesByParent = new Map<string | null, VisibleNode[]>();
 
     visible_nodes.forEach((node) => {
       nodesByPath.set(node.path, node);
@@ -765,54 +677,6 @@ export class TextDO extends DurableObject {
     return renderChildren(`/${username}`, 0);
   }
 
-  renderTabsHTML(explorerData: ExplorerData, currentPath: string): string {
-    const { open_tabs } = explorerData;
-
-    if (open_tabs.length === 0) {
-      return '<div class="no-tabs">No open tabs</div>';
-    }
-
-    const renderTab = (tab: FileNode): string => {
-      const isActive = tab.path === currentPath;
-      const fileName = tab.name;
-      const isPinned = tab.is_tab_pinned;
-
-      return `
-        <div class="tab-item ${isActive ? "active" : ""} ${
-        isPinned ? "pinned" : ""
-      }" 
-             data-path="${tab.path}"
-             onclick="window.location.href='${tab.path}'">
-          <span class="tab-name">${this.escapeHtml(fileName)}</span>
-          <div class="tab-actions">
-            ${
-              isPinned
-                ? `<button class="pin-btn pinned" 
-                    onclick="event.stopPropagation(); togglePin('${tab.path}')"
-                    title="Unpin tab">
-              ${pinSvg}
-            </button>`
-                : `<button class="pin-btn" 
-                    onclick="event.stopPropagation(); togglePin('${tab.path}')"
-                    title="Pin tab">
-              ${pinSvg}
-            </button>`
-            }
-            <button class="close-btn" 
-                    onclick="event.stopPropagation(); closeTab('${tab.path}')"
-                    title="Close tab">
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
-                <path d="M8 8.707l3.646 3.647.708-.707L8.707 8l3.647-3.646-.707-.708L8 7.293 4.354 3.646l-.707.708L7.293 8l-3.646 3.646.707.708L8 8.707z"/>
-              </svg>
-            </button>
-          </div>
-        </div>
-      `;
-    };
-
-    return open_tabs.map(renderTab).join("");
-  }
-
   escapeHtml(text: string): string {
     return text
       .replace(/&/g, "&amp;")
@@ -834,8 +698,8 @@ export class TextDO extends DurableObject {
       ?.split(";")
       .find((r) => r.includes("x_access_token"))
       ?.split("=")[1];
-    const username = await this.getUsernameFromToken(token || "");
-
+    const user = await this.getUserFromToken(token || "");
+    const { username } = user;
     const isAdmin = firstSegment === username || firstSegment === "anonymous";
 
     // Handle API endpoints - moved to /__api/* pattern
@@ -919,7 +783,6 @@ export class TextDO extends DurableObject {
       cursorColumn = nodeResult.last_cursor_column || 1;
       // Open tab when accessing file
       if (isAdmin) {
-        this.openTab(url.pathname, cursorLine, cursorColumn);
         this.setUIState(username, { last_open_path: url.pathname });
       }
     } else if (isAdmin && !isRoot && url.pathname !== `/${firstSegment}`) {
@@ -927,7 +790,6 @@ export class TextDO extends DurableObject {
       this.createFile(url.pathname, "", firstSegment);
       this.broadcastExplorerUpdate(firstSegment);
       textContent = "";
-      this.openTab(url.pathname);
       this.setUIState(username, { last_open_path: url.pathname });
     }
 
@@ -987,8 +849,7 @@ ${files
     if (request.headers.get("Upgrade") === "websocket") {
       return this.handleWebSocket(
         request,
-        url,
-        username,
+        user,
         isAdmin,
         textContent,
         firstSegment,
@@ -1066,18 +927,20 @@ ${files
     }
 
     // Prepare data for the main app
-    const explorerData = this.getExplorerData(firstSegment);
+    const visible_nodes = this.getVisibleNodes(firstSegment);
+    const explorerData = { visible_nodes, sessions: this.getRichSessions() };
     const uiState = this.getUIState(firstSegment);
     const explorerHTML = this.renderExplorerHTML(explorerData, url.pathname);
-    const tabsHTML = this.renderTabsHTML(explorerData, url.pathname);
+    const sessions = this.getRichSessions();
 
     return new Response(
       this.renderMainApp(
+        sessions,
+        user,
         url.pathname,
         firstSegment,
         textContent,
         explorerHTML,
-        tabsHTML,
         explorerData,
         uiState,
         isAdmin,
@@ -1085,9 +948,7 @@ ${files
         cursorLine,
         cursorColumn
       ),
-      {
-        headers: { "content-type": "text/html;charset=utf8" },
-      }
+      { headers: { "content-type": "text/html;charset=utf8" } }
     );
   }
 
@@ -1129,34 +990,6 @@ ${files
         status: 403,
         headers: { "Content-Type": "application/json" },
       });
-    }
-
-    if (apiEndpoint === "toggle-pin" && request.method === "POST") {
-      const { path } = requestData;
-      this.togglePinTab(path);
-      this.broadcastExplorerUpdate(firstSegment);
-      return new Response(JSON.stringify({ success: true }), {
-        headers: { "Content-Type": "application/json" },
-      });
-    }
-
-    if (apiEndpoint === "close-tab" && request.method === "POST") {
-      const { path } = requestData;
-      // Get next tab before closing current one
-      const nextPath = this.getNextOpenTab(firstSegment, path);
-
-      this.closeTab(path);
-      this.broadcastExplorerUpdate(firstSegment);
-
-      return new Response(
-        JSON.stringify({
-          success: true,
-          nextPath: nextPath || `/${firstSegment}`,
-        }),
-        {
-          headers: { "Content-Type": "application/json" },
-        }
-      );
     }
 
     if (apiEndpoint === "create-file" && request.method === "POST") {
@@ -1284,19 +1117,41 @@ ${files
     });
   }
 
+  getRichSessions() {
+    const sessions = Array.from(this.sessions.values());
+    const usernames = Array.from(new Set(sessions.map((x) => x.username)));
+    const uiStates = this.sql
+      .exec<UIState>(
+        `SELECT * FROM user_ui WHERE username IN (${usernames
+          .map((x) => `'${x}'`)
+          .join(",")})`
+      )
+      .toArray();
+
+    const richSessions = sessions.map((session) => {
+      const uiState = uiStates.find((x) => x.username === session.username);
+      const is_tab_foreground: 0 | 1 =
+        session.path === uiState?.last_open_path && uiState?.is_tab_foreground
+          ? 1
+          : 0;
+      return { ...session, is_tab_foreground };
+    });
+    return richSessions;
+  }
+
   handleWebSocket(
     request: Request,
-    url: URL,
-    username: string,
+    user: XUser,
     isAdmin: boolean,
     textContent: string,
     firstSegment: string,
     cursorLine: number,
     cursorColumn: number
   ): Response {
+    const url = new URL(request.url);
     const webSocketPair = new WebSocketPair();
     const [client, server] = Object.values(webSocketPair);
-
+    const { name, profile_image_url, username } = user;
     server.accept();
     const sessionId = crypto.randomUUID();
 
@@ -1304,26 +1159,55 @@ ${files
       path: url.pathname,
       webSocket: server,
       username,
+      name,
+      profile_image_url,
       isAdmin,
     });
+    const sessions = this.getRichSessions();
 
-    const explorerData = this.getExplorerData(firstSegment);
+    const visible_nodes = this.getVisibleNodes(firstSegment);
+    const explorer_data = { visible_nodes, sessions };
     const uiState = this.getUIState(firstSegment);
+
+    // when joining, sessions are broadcasted
+    this.broadcast(sessionId, {
+      type: "join",
+      sessionId,
+      username,
+      path: url.pathname,
+      sessionCount: this.sessions.size,
+      sessions,
+    });
+
+    // when closing, sessions are broadcasted again
+    server.addEventListener("close", () => {
+      this.sessions.delete(sessionId);
+      const sessions = this.getRichSessions();
+      this.broadcast(sessionId, {
+        type: "leave",
+        sessionId,
+        username,
+        path: url.pathname,
+        sessions,
+        sessionCount: this.sessions.size,
+      });
+    });
 
     server.send(
       JSON.stringify({
         type: "init",
-        sessionId,
         text: textContent,
         version: this.version,
+        sessionId,
         sessionCount: this.sessions.size,
+        sessions,
         isAdmin,
         username,
-        explorer_data: explorerData,
+        explorer_data,
         ui_state: uiState,
         line: cursorLine,
         column: cursorColumn,
-      } as WSMessage)
+      })
     );
 
     server.addEventListener("message", async (msg: MessageEvent) => {
@@ -1354,14 +1238,18 @@ ${files
             );
             return;
           }
-          this.broadcast(url.pathname, sessionId, {
-            type: "text",
-            text: data.text,
-            version: data.version,
-            fromSession: sessionId,
-            line: data.line,
-            column: data.column,
-          });
+          this.broadcast(
+            sessionId,
+            {
+              type: "text",
+              text: data.text,
+              version: data.version,
+              fromSession: sessionId,
+              line: data.line,
+              column: data.column,
+            },
+            url.pathname
+          );
           this.broadcastExplorerUpdate(firstSegment);
         } else if (data.type === "delete_file" && isAdmin && data.path) {
           this.deleteNode(data.path);
@@ -1387,21 +1275,6 @@ ${files
       } catch (err) {
         console.error("Error:", err);
       }
-    });
-
-    server.addEventListener("close", () => {
-      this.sessions.delete(sessionId);
-      this.broadcast(url.pathname, sessionId, {
-        type: "leave",
-        sessionId,
-        sessionCount: this.sessions.size,
-      });
-    });
-
-    this.broadcast(url.pathname, sessionId, {
-      type: "join",
-      sessionId,
-      sessionCount: this.sessions.size,
     });
 
     return new Response(null, { status: 101, webSocket: client });
@@ -1458,24 +1331,33 @@ ${files
       }
 
       const { access_token }: TokenResponse = await tokenResponse.json();
-      let username = `username_${await generateRandomString(7)}`;
+
+      let user: Partial<XUser> = {
+        username: `username_${await generateRandomString(7)}`,
+      };
 
       try {
-        const userResponse = await fetch("https://api.x.com/2/users/me", {
-          headers: { Authorization: `Bearer ${access_token}` },
-        });
+        const userResponse = await fetch(
+          "https://api.x.com/2/users/me?user.fields=profile_image_url,verified",
+          { headers: { Authorization: `Bearer ${access_token}` } }
+        );
+
         if (userResponse.ok) {
-          const { data }: UserResponse = await userResponse.json();
-          username = data.username;
+          const userData = await userResponse.json<{ data: XUser }>();
+          user = userData.data as XUser;
+          user.profile_image_url = user.profile_image_url?.replace(
+            "_normal",
+            "_400x400"
+          );
         }
       } catch (err) {
         console.error("Failed to fetch user info:", err);
       }
 
-      await this.env.KV.put(`token:${access_token}`, username);
+      await this.env.KV.put(`v2:token:${access_token}`, JSON.stringify(user));
 
       const headers = new Headers({
-        Location: url.searchParams.get("redirect") || "/" + username,
+        Location: url.searchParams.get("redirect") || "/" + user.username,
       });
       const isLocalhost = this.env.ENVIRONMENT === "development";
       const securePart = isLocalhost ? "" : " Secure;";
@@ -1503,7 +1385,7 @@ ${files
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>XYText - ${headline}</title>
+    <title>XYText</title>
     <style>
         body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; margin: 0; width: 100vw; height: 100vh; display: flex; align-items: center; justify-content: center; text-align: center; }
         h1 { color: #333; }
@@ -1513,7 +1395,8 @@ ${files
 </head>
 <body>
     <div class="container">
-        <h1>${headline}</h1>
+        <h1>Your Agent-Friendly Editor in the Cloud</h1>
+        <p>Works best in Chromium-based browsers</p>
         <a href="/login" class="btn">Login with X</a>
     </div>
 </body>
@@ -1521,11 +1404,12 @@ ${files
   }
 
   renderMainApp(
+    sessions: Session[],
+    user: XUser,
     currentPath: string,
     username: string,
     textContent: string,
     explorerHTML: string,
-    tabsHTML: string,
     explorerData: ExplorerData,
     uiState: UIState,
     isAdmin: boolean,
@@ -1610,96 +1494,6 @@ ${files
             display: flex;
             flex-direction: column;
             height: 100vh;
-        }
-        
-        .tabs-container {
-            background: var(--tabs-bg);
-            border-bottom: 1px solid var(--border-color);
-            min-height: 35px;
-            display: flex;
-            align-items: center;
-            overflow-x: auto;
-            white-space: nowrap;
-        }
-        
-        .tab-item {
-            background: var(--tab-bg);
-            color: var(--text-color);
-            padding: 8px 16px;
-            border-right: 1px solid var(--border-color);
-            cursor: pointer;
-            display: inline-flex;
-            align-items: center;
-            font-size: 13px;
-            min-width: 120px;
-            position: relative;
-            transition: background-color 0.2s ease;
-        }
-        
-        .tab-item:hover {
-            background: var(--tab-hover-bg);
-        }
-        
-        .tab-item:hover .close-btn {
-            opacity: 1;
-        }
-        
-        .tab-item.active {
-            background: var(--tab-active-bg);
-            color: var(--text-color);
-        }
-        
-        .tab-item.pinned {
-            background: var(--explorer-header-bg);
-        }
-        
-        .tab-item.pinned.active {
-            background: var(--tab-active-bg);
-        }
-        
-        .tab-name {
-            flex: 1;
-            overflow: hidden;
-            text-overflow: ellipsis;
-        }
-        
-        .tab-actions {
-            display: flex;
-            gap: 4px;
-            margin-left: 8px;
-        }
-        
-        .pin-btn, .close-btn {
-            background: none;
-            border: none;
-            color: var(--text-color);
-            opacity: 0;
-            cursor: pointer;
-            padding: 2px 4px;
-            font-size: 12px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            width: 20px;
-            height: 20px;
-            transition: opacity 0.2s ease, background-color 0.2s ease;
-        }
-        
-        .pin-btn:hover, .close-btn:hover {
-            opacity: 1;
-        }
-        
-        .pin-btn.pinned {
-            opacity: 1;
-        }
-        
-        .close-btn {
-            opacity: 0;
-        }
-        
-        .close-btn:hover {
-            background: var(--tab-hover-bg);
-            border-radius: 3px;
         }
         
         .main-content {
@@ -1813,7 +1607,7 @@ ${files
             min-height: 22px;
         }
         
-        .no-files, .no-tabs {
+        .no-files {
             padding: 20px;
             text-align: center;
             color: var(--text-color);
@@ -1870,11 +1664,11 @@ ${files
             margin: 4px 0;
         }
 
-        .editor-container.loaded::before {
+/*        .editor-container.loaded::before {
             opacity: 0;
             pointer-events: none;
         }
-
+*/
         /* Ensure Monaco container matches theme immediately */
         .monaco-editor {
             background-color: var(--editor-bg) !important;
@@ -1889,12 +1683,7 @@ ${files
 </head>
 <body>
     <div class="vscode-layout">
-        <!--
-        <div class="tabs-container" id="tabsContainer">
-            ${tabsHTML}
-        </div>
-        -->
-        
+     
         <div class="main-content">
             <div class="editor-container" id="editor">
             </div>
@@ -1912,7 +1701,8 @@ ${files
               <span id="connectionStatus">Connected</span>
               <span class="btn" onclick="window.location.href='/logout'">Logout</span>
               <span class="btn" onclick="window.open('https://letmeprompt.com/from/'+window.location.href,'${currentPath}')">Prompt</span>
-              <span class="btn" onclick="window.open('https://${username}.xytext.com/'+window.location.pathname,'${currentPath}')">Preview</span>
+              <a href="/studio" target="studio">Studio</a>
+              <span class="btn" onclick="window.open('https://${username}.xytext.com'+window.location.pathname.replace('${username}/',''),'${username}.xytext.com/${currentPath}')">Preview</span>
             </span>
             <span id="cursorInfo">Line ${cursorLine}, Column ${cursorColumn}</span>
         </div>
@@ -1940,6 +1730,8 @@ ${files
             currentPath: ${JSON.stringify(currentPath)},
             explorerData: ${JSON.stringify(explorerData)},
             uiState: ${JSON.stringify(uiState)},
+            sessions: ${JSON.stringify(sessions)},
+            user: ${JSON.stringify(user)},
             contextMenuTarget: null,
             commandPaletteOpen: false,
             waitingForSecondKey: false,
@@ -2010,51 +1802,12 @@ ${files
                             this.updateCursorInfo();
                             this.sendCursorPosition(e.position.lineNumber, e.position.column);
                         });
-                        
-                        // Register commands
-                        this.registerCommands();
-                        
+                                                
                         resolve();
                     });
                 });
             },
             
-            registerCommands() {
-                // Pin/Unpin tab (Cmd/Ctrl+K, Shift+Enter)
-                this.editor.addAction({
-                    id: 'pin-tab',
-                    label: 'Pin Tab',
-                    keybindings: [
-                        monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyK
-                    ],
-                    precondition: null,
-                    keybindingContext: null,
-                    contextMenuGroupId: 'navigation',
-                    contextMenuOrder: 1.5,
-                    run: () => {
-                        this.togglePinCurrentTab();
-                    }
-                });
-                
-                // Close tab (Cmd/Ctrl+W)
-              this.editor.addAction({
-                id: 'close-tab',
-                label: 'Close Tab',
-                keybindings: [
-                    monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyW,
-                    monaco.KeyMod.Alt | monaco.KeyCode.KeyW
-                ],
-                precondition: null,
-                keybindingContext: null,
-                contextMenuGroupId: 'navigation',
-                contextMenuOrder: 1.6,
-                run: () => {
-                    this.closeCurrentTab();
-                }
-            });
-
-                
-            },
             
 
             
@@ -2242,9 +1995,6 @@ ${files
                     menu.style.top = event.pageY + 'px';
                 };
                 
-                window.togglePin = async (path) => {
-                    await this.togglePin(path);
-                };
                 
                 window.closeTab = async (path) => {
                     const firstSegment = path.split('/')[1];
@@ -2405,10 +2155,6 @@ ${files
                 };
             },
             
-            async togglePinCurrentTab() {
-                if (!this.isAdmin) return;
-                await this.togglePin(this.currentPath);
-            },
             
             async closeCurrentTab() {
                 if (!this.isAdmin) return;
@@ -2425,14 +2171,6 @@ ${files
                 }
             },
             
-            async togglePin(path) {
-                const firstSegment = path.split('/')[1];
-                await fetch(\`/\${firstSegment}/__api/toggle-pin\`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ path })
-                });
-            },
             
             setupScrollTracking() {
                 const explorerContent = document.getElementById('explorerContent');
@@ -2488,7 +2226,15 @@ ${files
             },
             
             handleMessage(message) {
+
                 switch (message.type) {
+                    case 'join':
+                      console.log(message.username + ' has opened ' + message.path+ '; now ' + message.sessionCount + ' open sessions');
+                      break;
+                    case 'leave':
+                      console.log(message.username + ' has closed ' + message.path + '; now ' + message.sessionCount + ' open sessions');
+                      break;
+                    
                     case 'init':
                         this.sessionId = message.sessionId;
                         this.version = message.version;
@@ -2526,61 +2272,14 @@ ${files
                 }
             },
             
-            updateUI() {
-                // Update tabs
-                const tabsContainer = document.getElementById('tabsContainer');
-                if (tabsContainer) {
-                    this.renderTabs();
-                }
-                
+            updateUI() {                
                 // Update explorer
                 const explorerContent = document.getElementById('explorerContent');
                 if (explorerContent) {
                     this.renderExplorer();
                 }
             },
-                        
-            renderTabs() {
-                const tabsContainer = document.getElementById('tabsContainer');
-                if (!tabsContainer || !this.explorerData) return;
-                
-                const { open_tabs } = this.explorerData;
-                
-                if (open_tabs.length === 0) {
-                    tabsContainer.innerHTML = '<div class="no-tabs">No open tabs</div>';
-                    return;
-                }
-                
-                const renderTab = (tab) => {
-                    const isActive = tab.path === this.currentPath;
-                    const fileName = tab.name;
-                    const isPinned = tab.is_tab_pinned;
-                    
-                    return \`
-                        <div class="tab-item \${isActive ? 'active' : ''} \${isPinned ? 'pinned' : ''}" 
-                            data-path="\${tab.path}"
-                            onclick="window.location.href='\${tab.path}'">
-                            <span class="tab-name">\${this.escapeHtml(fileName)}</span>
-                            <div class="tab-actions">
-                                <button class="pin-btn \${isPinned ? 'pinned' : ''}" 
-                                        onclick="event.stopPropagation(); togglePin('\${tab.path}')"
-                                        title="\${isPinned ? 'Unpin' : 'Pin'} tab">
-                                    ${pinSvg}
-                                </button>
-                                <button class="close-btn" 
-                                        onclick="event.stopPropagation(); closeTab('\${tab.path}')"
-                                        title="Close tab">
-                                    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
-                                        <path d="M8 8.707l3.646 3.647.708-.707L8.707 8l3.647-3.646-.707-.708L8 7.293 4.354 3.646l-.707.708L7.293 8l-3.646 3.646.707.708L8 8.707z"/>
-                                    </svg>
-                                </button>
-                            </div>
-                        </div>
-                    \`;
-                };
-                
-                tabsContainer.innerHTML = open_tabs.map(renderTab).join('');
-            },
+               
 
             renderExplorer() {
                 const explorerContent = document.getElementById('explorerContent');
@@ -2692,50 +2391,89 @@ ${files
 </body>
 </html>`;
   }
-
-  broadcast(path: string, senderSessionId: string, message: WSMessage): void {
+  /** broadcast information to all sessions or sessions at a given path */
+  broadcast(senderSessionId: string, message: WSMessage, path?: string): void {
     const messageStr = JSON.stringify(message);
+    //@ts-ignore
     for (const [sessionId, session] of this.sessions.entries()) {
-      if (sessionId !== senderSessionId && session.path === path) {
-        try {
-          session.webSocket.send(messageStr);
-        } catch (err) {
-          this.sessions.delete(sessionId);
+      if (sessionId !== senderSessionId) {
+        if (!path || (path && session.path === path)) {
+          try {
+            session.webSocket.send(messageStr);
+          } catch (err) {
+            this.sessions.delete(sessionId);
+          }
         }
       }
     }
   }
 
   broadcastExplorerUpdate(username: string): void {
-    const explorerData = this.getExplorerData(username);
+    const visible_nodes = this.getVisibleNodes(username);
+    const sessions = this.getRichSessions();
     const message: WSMessage = {
       type: "explorer_update",
-      explorer_data: explorerData,
+      explorer_data: { visible_nodes, sessions },
     };
     const messageStr = JSON.stringify(message);
-
+    //@ts-ignore
     for (const [sessionId, session] of this.sessions.entries()) {
-      if (session.path.startsWith(`/${username}/`)) {
-        try {
-          session.webSocket.send(messageStr);
-        } catch (err) {
-          this.sessions.delete(sessionId);
-        }
+      try {
+        session.webSocket.send(messageStr);
+      } catch (err) {
+        this.sessions.delete(sessionId);
       }
     }
   }
 }
 
+const getLoggedStub = async (request: Request, env: Env) => {
+  const token =
+    request.headers
+      .get("Cookie")
+      ?.split(";")
+      .find((r) => r.includes("x_access_token"))
+      ?.split("=")[1] ||
+    request.headers.get("Authorization")?.slice("Bearer ".length);
+  if (!token) {
+    return;
+  }
+  const user = token
+    ? await env.KV.get<XUser>(`v2:token:${decodeURIComponent(token)}`, "json")
+    : null;
+  if (!user) {
+    return;
+  }
+  const stub = env.TEXT.get(env.TEXT.idFromName(user.username + ":v14"));
+  return stub;
+};
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
-    const username = url.pathname.split("/")[1];
-    const stub = env.TEXT.get(env.TEXT.idFromName(username + ":v14"));
+
     if (url.pathname === "/studio") {
+      const stub = await getLoggedStub(request, env);
+      if (!stub) {
+        return new Response("Unauthorized", { status: 401 });
+      }
       return studioMiddleware(request, stub.raw, {
-        basicAuth: { username, password: env.ADMIN_SECRET },
+        dangerouslyDisableAuth: true,
       });
     }
+    if (url.pathname === "/exec") {
+      const stub = await getLoggedStub(request, env);
+      if (!stub) {
+        return new Response("Unauthorized", { status: 401 });
+      }
+      const query = url.searchParams.get("query");
+      const bindings = url.searchParams.getAll("binding");
+      const result = await stub.exec(query, ...bindings);
+      return new Response(JSON.stringify(result, undefined, 2), {
+        headers: { "content-type": "application/json;charset=utf8" },
+      });
+    }
+    const username = url.pathname.split("/")[1];
+    const stub = env.TEXT.get(env.TEXT.idFromName(username + ":v14"));
     return stub.fetch(request);
   },
 };

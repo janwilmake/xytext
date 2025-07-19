@@ -19,6 +19,10 @@
     "X_REDIRECT_URI": "https://xytext.com/callback"
   },
   "kv_namespaces": [
-    { "binding": "KV", "id": "20e8d370e1d149659c449102f2ec6412" }
+    {
+      "binding": "KV",
+      "id": "20e8d370e1d149659c449102f2ec6412",
+      "experimental_remote": true
+    }
   ]
 }
