@@ -80,10 +80,13 @@ interface VisibleNode extends Record<string, SqlStorageValue> {
 }
 
 interface UIState extends Record<string, SqlStorageValue> {
+  username: string;
   explorer_scroll_top_path: string | null;
   last_open_path: string | null;
   is_tab_foreground: 0 | 1;
   follow_username: string | null;
+  profile_image_url: string | null;
+  name: string | null;
   updated_at: number;
 }
 
@@ -126,6 +129,7 @@ async function generateCodeChallenge(codeVerifier: string): Promise<string> {
 
 @Queryable()
 export class TextDO extends DurableObject {
+  private lastStateUpdate = 0;
   private sessions: Map<string, Session> = new Map();
   private version: number = 0;
   public sql: SqlStorage;
@@ -163,6 +167,8 @@ export class TextDO extends DurableObject {
     last_open_path TEXT,
     is_tab_foreground INTEGER DEFAULT 0,
     follow_username TEXT,
+    profile_image_url TEXT,
+    name TEXT,
     updated_at INTEGER DEFAULT (strftime('%s', 'now'))
   )
 `);
@@ -178,6 +184,9 @@ export class TextDO extends DurableObject {
     );
     this.sql.exec(
       `CREATE INDEX IF NOT EXISTS idx_expanded ON nodes(is_expanded)`
+    );
+    this.sql.exec(
+      `CREATE INDEX IF NOT EXISTS idx_user_ui_foreground ON user_ui(is_tab_foreground)`
     );
   }
 
@@ -535,10 +544,13 @@ export class TextDO extends DurableObject {
 
     return (
       result || {
+        username,
         explorer_scroll_top_path: null,
         last_open_path: null,
         is_tab_foreground: 0,
         follow_username: null,
+        profile_image_url: null,
+        name: null,
         updated_at: 0,
       }
     );
@@ -565,14 +577,16 @@ export class TextDO extends DurableObject {
 
     this.sql.exec(
       `
-    INSERT OR REPLACE INTO user_ui (username, explorer_scroll_top_path, last_open_path, is_tab_foreground, follow_username, updated_at)
-    VALUES (?, ?, ?, ?, ?, strftime('%s', 'now'))
+    INSERT OR REPLACE INTO user_ui (username, explorer_scroll_top_path, last_open_path, is_tab_foreground, follow_username, profile_image_url, name, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, strftime('%s', 'now'))
   `,
       username,
       merged.explorer_scroll_top_path || null,
       merged.last_open_path || null,
       merged.is_tab_foreground || 0,
-      merged.follow_username || null
+      merged.follow_username || null,
+      merged.profile_image_url || null,
+      merged.name || null
     );
   }
 
@@ -967,27 +981,17 @@ ${files
 
     this.handleFollowRedirect(username, url.pathname);
 
-    // Prepare data for the main app
+    // Prepare data for the main app - now using database-driven approach
     const visible_nodes = this.getVisibleNodes(firstSegment);
-    const sessions = this.getRichSessions().map((s) => {
-      // ensure your own is_tab_foreground is correct
-      if (s.username !== user.username) {
-        return s;
-      }
-      if (s.path === url.pathname) {
-        return { ...s, is_tab_foreground: 1 as 1 };
-      }
-      return { ...s, is_tab_foreground: 0 as 0 };
-    });
-    const pathViewers = this.getPathViewers(sessions);
-    console.log({ sessions, pathViewers });
+    const sessions = this.getRichSessions();
+    const pathViewers = this.getPathViewersFromDB(firstSegment);
     const explorerData = {
       visible_nodes,
       sessions,
       pathViewers,
     };
 
-    const uiState = this.getUIState(firstSegment);
+    const uiState = this.getUIState(username);
     const explorerHTML = this.renderExplorerHTML(explorerData, url.pathname);
 
     return new Response(
@@ -1193,11 +1197,15 @@ ${files
   getRichSessions() {
     const sessions = Array.from(this.sessions.values());
     const usernames = Array.from(new Set(sessions.map((x) => x.username)));
+
+    if (usernames.length === 0) return [];
+
     const uiStates = this.sql
       .exec<UIState>(
         `SELECT * FROM user_ui WHERE username IN (${usernames
-          .map((x) => `'${x}'`)
-          .join(",")})`
+          .map(() => "?")
+          .join(",")})`,
+        ...usernames
       )
       .toArray();
 
@@ -1212,6 +1220,46 @@ ${files
     return richSessions;
   }
 
+  // New method to get pathViewers from database instead of sessions
+  getPathViewersFromDB(firstSegment: string): Record<string, Session[]> {
+    const pathViewers: Record<string, Session[]> = {};
+
+    // Get all users with foreground tabs and their paths
+    const foregroundUsers = this.sql
+      .exec<UIState>(
+        `SELECT username, last_open_path, profile_image_url, name 
+         FROM user_ui 
+         WHERE is_tab_foreground = 1 
+         AND last_open_path IS NOT NULL 
+         AND last_open_path LIKE ?`,
+        `/${firstSegment}/%`
+      )
+      .toArray();
+
+    foregroundUsers.forEach((user) => {
+      if (!user.last_open_path) return;
+
+      if (!pathViewers[user.last_open_path]) {
+        pathViewers[user.last_open_path] = [];
+      }
+
+      // Create a Session-like object from the database data
+      pathViewers[user.last_open_path].push({
+        username: user.username,
+        name: user.name || user.username,
+        profile_image_url: user.profile_image_url || "/anonymous.png",
+        path: user.last_open_path,
+        webSocket: null as any, // Not needed for display
+        isAdmin: false, // Not needed for display
+        is_tab_foreground: 1,
+      });
+    });
+
+    return pathViewers;
+  }
+
+  // Keep the old method for backward compatibility but mark as deprecated
+  /** @deprecated Use getPathViewersFromDB instead */
   getPathViewers(sessions: Session[]): Record<string, Session[]> {
     const pathViewers: Record<string, Session[]> = {};
     sessions.forEach((session) => {
@@ -1259,15 +1307,17 @@ ${files
       is_tab_foreground: 1,
     });
 
-    // Set tab as foreground when opening
+    // Set tab as foreground when opening and store user info in DB
     this.setUIState(username, {
       last_open_path: url.pathname,
       is_tab_foreground: 1,
+      profile_image_url,
+      name,
     });
 
     const sessions = this.getRichSessions();
     const visible_nodes = this.getVisibleNodes(firstSegment);
-    const pathViewers = this.getPathViewers(sessions);
+    const pathViewers = this.getPathViewersFromDB(firstSegment);
     const explorer_data = { visible_nodes, sessions, pathViewers };
     const uiState = this.getUIState(firstSegment);
 
@@ -1381,9 +1431,16 @@ ${files
           data.type === "set_tab_foreground" &&
           data.is_tab_foreground !== undefined
         ) {
-          this.setUIState(username, {
+          const newPartialState = {
             is_tab_foreground: data.is_tab_foreground,
-          });
+            last_open_path: url.pathname,
+          };
+          console.log(
+            "handleWebsocket set_tab_foreground",
+            username,
+            newPartialState
+          );
+          this.setUIState(username, newPartialState);
           this.broadcastExplorerUpdate(firstSegment);
         }
       } catch (err) {
@@ -1940,7 +1997,7 @@ ${imageUrls
                                     }</span>
                                 </div>
                                 ${
-                                  user.username !== u.username
+                                  user.username !== u.username && false
                                     ? `<button class="follow-btn" 
                                         data-username="${u.username}"
                                         onclick="toggleFollow('${u.username}')">
@@ -1986,7 +2043,6 @@ ${imageUrls
             ws: null,
             sessionId: null,
             version: 0,
-            followUsername: ${JSON.stringify(uiState.follow_username)},
             isAdmin: ${JSON.stringify(isAdmin)},
             username: ${JSON.stringify(username)},
             currentPath: ${JSON.stringify(currentPath)},
@@ -1997,7 +2053,6 @@ ${imageUrls
             contextMenuTarget: null,
             commandPaletteOpen: false,
             waitingForSecondKey: false,
-            followedUser: null,
             firstSegment: ${JSON.stringify(username)},
             
             async init() {
@@ -2006,7 +2061,7 @@ ${imageUrls
                 this.setupEventListeners();
                 this.setupScrollTracking();
                 this.setupDragAndDrop();
-                this.setupFollowSystem();
+                this.updateFollowButtons();
                 this.setupTabVisibility();
                 console.log('VSCode app initialized');
             },
@@ -2029,7 +2084,10 @@ ${imageUrls
             
             async setTabForeground(is_tab_foreground) {
                 // Update via WebSocket
+                console.log("hit setTabForeground", is_tab_foreground);
                 if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+                    console.log("ws open!",is_tab_foreground);
+
                     this.ws.send(JSON.stringify({
                         type: 'set_tab_foreground',
                         is_tab_foreground
@@ -2037,21 +2095,16 @@ ${imageUrls
                 }
             },
             
-            setupFollowSystem() {
-                // followUsername is now passed from the backend
-                this.followedUser = this.followUsername;
-                this.updateFollowButtons();
-            },
-            
             updateFollowButtons() {
+                console.log('Updating follow buttons, current uiState:', this.uiState); // Add debugging
+
                 document.querySelectorAll('.follow-btn').forEach(btn => {
                     const username = btn.dataset.username;
-                    const isFollowing = this.followedUser === username;
+                    const isFollowing = this.uiState?.follow_username === username;
                     btn.textContent = isFollowing ? 'Unfollow' : 'Follow';
                     btn.classList.toggle('following', isFollowing);
                 });
             },
-            
 
             
             async setupMonaco() {
@@ -2285,8 +2338,8 @@ ${imageUrls
                 window.handleExplorerClick = (path, type) => {
                     if (type === 'file') {
                         window.open(path, path).focus();
-                        if(this.followedUser){
-                           window.toggleFollow(this.followUser);
+                        if(this.uiState?.follow_username){
+                           window.toggleFollow(this.uiState?.follow_username);
                         }
                     } else if (type === 'folder') {
                         window.toggleExpansion(path);
@@ -2302,23 +2355,27 @@ ${imageUrls
                     menu.style.top = event.pageY + 'px';
                 };
                 
-                window.toggleFollow = async (username) => {
-                    const newFollowState = this.followedUser === username ? null : username;
-                    
-                    // Update backend immediately
-                    const response = await fetch(\`/\${this.firstSegment}/__api/set-follow-username\`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ follow_username: newFollowState })
-                    });
-                    
-                    if (response.ok) {
-                        this.followedUser = newFollowState;
-                        this.updateFollowButtons();
-                    } else {
-                        alert('Failed to update follow status');
-                    }
-                };
+                  window.toggleFollow = async (username) => {
+                      const newFollowState = this.uiState?.follow_username === username ? null : username;
+                      
+                      // Update local state immediately for UI responsiveness
+                      this.uiState = { ...this.uiState, follow_username: newFollowState };
+                      this.updateFollowButtons(); // Update UI immediately
+                      
+                      // Update backend
+                      const response = await fetch(\`/\${this.firstSegment}/__api/set-follow-username\`, {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ follow_username: newFollowState })
+                      });
+                      
+                      if (!response.ok) {
+                          // Revert local state if backend update failed
+                          this.uiState = { ...this.uiState, follow_username: this.uiState?.follow_username === username ? null : username };
+                          this.updateFollowButtons();
+                          alert('Failed to update follow status');
+                      }
+                  };
 
                 
                 window.copyNode = async () => {
@@ -2552,11 +2609,11 @@ ${imageUrls
                       this.explorerData = message.explorer_data;
                       this.uiState = message.ui_state;
                       this.sessions = message.sessions;
-                      this.followIfFollowing(); // Check for follow redirect on init
+                      this.followIfFollowing();
                       console.log("got init")
                       // Only update explorer on init, not the entire UI
-                      // this.renderExplorer();
-                      this.updateFollowButtons(); // Just update follow buttons without re-rendering images
+                      this.renderExplorer();
+                      this.updateFollowButtons();
                       break;
 
                     case 'text':
@@ -2604,14 +2661,14 @@ ${imageUrls
             },
 
             followIfFollowing() {
-                if (!this.followedUser) return;
+                if (!this.uiState?.follow_username) return;
                 
                 const followedSession = this.sessions.find(s => 
-                    s.is_tab_foreground && this.followedUser === s.username
+                    s.is_tab_foreground && this.uiState.follow_username === s.username
                 );
                 
                 if (followedSession && followedSession.path !== this.currentPath) {
-                    console.log(\`Following \${this.followedUser} to \${followedSession.path}\`);
+                    console.log(\`Following \${this.uiState.follow_username} to \${followedSession.path}\`);
                     // Use replace instead of href to avoid adding to history
                     window.location.replace(followedSession.path);
                 }
@@ -2656,7 +2713,7 @@ ${imageUrls
                                   class="user-name">\${user.name}</a>
                                 <span class="user-username">@\${user.username}</span>
                             </div>
-                            \${user.username !== window.vscodeApp.user.username ? \`<button class="follow-btn" 
+                            \${user.username !== window.vscodeApp.user.username && false ? \`<button class="follow-btn" 
                                     data-username="\${user.username}"
                                     onclick="toggleFollow('\${user.username}')">
                                 Follow
@@ -2809,11 +2866,11 @@ ${imageUrls
     }
   }
 
-  broadcastExplorerUpdate(username: string): void {
-    const visible_nodes = this.getVisibleNodes(username);
+  broadcastExplorerUpdate(firstSegment: string): void {
+    const visible_nodes = this.getVisibleNodes(firstSegment);
     const sessions = this.getRichSessions();
+    const pathViewers = this.getPathViewersFromDB(firstSegment);
 
-    const pathViewers = this.getPathViewers(sessions);
     const message: WSMessage = {
       type: "explorer_update",
       explorer_data: { visible_nodes, sessions, pathViewers },
