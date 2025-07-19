@@ -2,7 +2,7 @@ Alternatives approach: https://github.com/yjs/yjs
 
 Icons: https://github.com/microsoft/vscode-icons/tree/main/icons/dark
 
-# ✅ Follow functionality
+# Follow functionality
 
 if turned on, any (anonymous or not) user should be able to follow ANYONE viewing the files by listening on broadcasted active tab changes in the active tab. This would simply `window.open(path,path).focus()`. Readonly users should autofollow the first other active user on the same file, if any, unless turned off. This would really make this thing amazing, and would make me fully disable the tabs thingy altogether.
 
@@ -26,3 +26,5 @@ https://letmeprompt.com/rules-httpsuithu-cx2ox70
 https://locationroulette.gptideas.com/
 
 Initial version done in the same day!
+
+Update: after getting lots of bugs, it seemed impossible and wasted over an hour on this debugging. It's possible but state is very hard to track and seems stale at times.
