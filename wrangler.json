@@ -1,6 +1,5 @@
 {
   "$schema": "https://unpkg.com/wrangler@latest/config-schema.json",
-
   "name": "xtextareado",
   "main": "main.ts",
   "compatibility_date": "2025-06-05",
