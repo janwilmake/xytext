@@ -2,6 +2,12 @@
 
 Initial implementation that broadcasts file content to all clients
 
+# How
+
+- ✅ Login with X (or my own oauth provider)
+- ✅ `EditDurableObject`: ensures realtime sending and receiving of changes to markdown
+- ✅ sidebar: explorer with files/folders
+
 # July 4th
 
 ✅ Added massive amount of functionality: tabs and hierarchical navigation. Did this by having just a single table datamodel. Designed it like this with efficiency top of mind. tabs and navigation state is also broadcasted.
